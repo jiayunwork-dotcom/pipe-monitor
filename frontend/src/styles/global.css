@@ -1,0 +1,23 @@
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif; }
+.health-green { color: #52c41a; }
+.health-yellow { color: #faad14; }
+.health-red { color: #ff4d4f; }
+.health-blue { color: #1890ff; }
+.health-gray { color: #bfbfbf; }
+.page-wrapper { padding: 24px; }
+.stat-card .ant-statistic-title { font-size: 14px; color: #666; }
+.dashboard-pipeline-card { cursor: pointer; transition: all 0.2s; border: 2px solid transparent; }
+.dashboard-pipeline-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+.dashboard-pipeline-card.h-green { border-left: 4px solid #52c41a; }
+.dashboard-pipeline-card.h-yellow { border-left: 4px solid #faad14; }
+.dashboard-pipeline-card.h-red { border-left: 4px solid #ff4d4f; }
+.dashboard-pipeline-card.h-blue { border-left: 4px solid #1890ff; }
+.dashboard-pipeline-card.h-gray { border-left: 4px solid #bfbfbf; }
+.gantt-bar { height: 24px; border-radius: 4px; position: relative; }
+.gantt-bar.s-success { background: #b7eb8f; border: 1px solid #52c41a; }
+.gantt-bar.s-running { background: #91d5ff; border: 1px solid #1890ff; }
+.gantt-bar.s-failed, .gantt-bar.s-timeout { background: #ffa39e; border: 1px solid #ff4d4f; }
+.gantt-bar.s-skipped, .gantt-bar.s-cancelled { background: #ffe58f; border: 1px solid #faad14; }
+.gantt-bar.s-pending { background: #f0f0f0; border: 1px dashed #bfbfbf; }
+.dag-container { width: 100%; height: 600px; border: 1px solid #eee; border-radius: 8px; }
