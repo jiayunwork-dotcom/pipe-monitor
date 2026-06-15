@@ -28,8 +28,8 @@ type Client struct {
 type Hub struct {
 	clients    map[*Client]bool
 	broadcast  chan []byte
-	register   chan *Client
-	unregister chan *Client
+	Register   chan *Client
+	Unregister chan *Client
 	rdb        *redisClient.Client
 	mu         sync.RWMutex
 }
@@ -38,8 +38,8 @@ func NewHub(rdb *redisClient.Client) *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
 		broadcast:  make(chan []byte, 256),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
+		Register:   make(chan *Client),
+		Unregister: make(chan *Client),
 		rdb:        rdb,
 	}
 }
@@ -47,13 +47,13 @@ func NewHub(rdb *redisClient.Client) *Hub {
 func (h *Hub) Run() {
 	for {
 		select {
-		case client := <-h.register:
+		case client := <-h.Register:
 			h.mu.Lock()
 			h.clients[client] = true
 			h.mu.Unlock()
 			log.Printf("WS client connected: %s (tenant: %d)", client.ID, client.TenantID)
 
-		case client := <-h.unregister:
+		case client := <-h.Unregister:
 			h.mu.Lock()
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
@@ -110,7 +110,7 @@ func (h *Hub) BroadcastGlobal(msgType string, payload interface{}) {
 
 func (c *Client) ReadPump() {
 	defer func() {
-		c.Hub.unregister <- c
+		c.Hub.Unregister <- c
 		c.Conn.Close()
 	}()
 

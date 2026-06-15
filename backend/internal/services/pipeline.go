@@ -412,8 +412,9 @@ func (s *PipelineService) GetAffectedPipelines(pipelineID uint, tenantID uint, i
 	}
 
 	for i := range result {
-		cnt, _ := s.db.Model(&models.PipelineDependency{}).Where("upstream_id = ?", result[i].PipelineID).Count(&int64(result[i].TotalImpact))
-		_ = cnt
+		var cnt int64
+		s.db.Model(&models.PipelineDependency{}).Where("upstream_id = ?", result[i].PipelineID).Count(&cnt)
+		result[i].TotalImpact = int(cnt)
 	}
 	return result, nil
 }

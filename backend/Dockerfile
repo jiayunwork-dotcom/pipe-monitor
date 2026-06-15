@@ -4,10 +4,11 @@ WORKDIR /app
 
 RUN apk add --no-cache git
 
-COPY go.mod go.sum* ./
-RUN if [ -f go.sum ]; then go mod download; fi
+COPY go.mod ./
+RUN go mod download || true
 
 COPY . .
+RUN go mod tidy
 
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/server ./cmd/server
 
@@ -18,7 +19,6 @@ RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /app
 
 COPY --from=builder /app/server .
-COPY --from=builder /app/sql ./sql
 
 EXPOSE 8080
 
