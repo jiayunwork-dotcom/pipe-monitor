@@ -64,6 +64,13 @@ type AlertRule struct {
 	SuppressWindowMin int            `gorm:"default:60" json:"suppressWindowMin"`
 	Enabled          bool            `gorm:"default:true" json:"enabled"`
 	Description      string          `gorm:"type:text" json:"description"`
+	EscalationEnabled bool           `gorm:"default:false" json:"escalationEnabled"`
+	EscalationAfterMin int           `gorm:"default:15" json:"escalationAfterMin"`
+	EscalationToSeverity AlertSeverity `gorm:"size:20;default:critical" json:"escalationToSeverity"`
+	SilentEnabled    bool            `gorm:"default:false" json:"silentEnabled"`
+	SilentStart      string          `gorm:"size:10;default:02:00" json:"silentStart"`
+	SilentEnd        string          `gorm:"size:10;default:06:00" json:"silentEnd"`
+	SilentSummaryEnabled bool        `gorm:"default:true" json:"silentSummaryEnabled"`
 	CreatedAt        time.Time       `json:"createdAt"`
 	UpdatedAt        time.Time       `json:"updatedAt"`
 }
@@ -108,4 +115,19 @@ type AlertNotification struct {
 	Status    string          `gorm:"size:20;default:sent" json:"status"`
 	Error     string          `gorm:"type:text" json:"error"`
 	SentAt    time.Time       `json:"sentAt"`
+}
+
+type AlertEscalation struct {
+	ID             uint           `gorm:"primaryKey" json:"id"`
+	AlertID        uint           `gorm:"not null;index" json:"alertId"`
+	Alert          AlertEvent     `gorm:"foreignKey:AlertID" json:"-"`
+	TenantID       uint           `gorm:"not null;index" json:"tenantId"`
+	FromSeverity   AlertSeverity  `gorm:"size:20;not null" json:"fromSeverity"`
+	ToSeverity     AlertSeverity  `gorm:"size:20;not null" json:"toSeverity"`
+	Reason         string         `gorm:"size:200" json:"reason"`
+	TriggeredBy    string         `gorm:"size:50;not null" json:"triggeredBy"`
+	TriggeredByID  *uint          `json:"triggeredById"`
+	TriggeredAt    time.Time      `gorm:"index" json:"triggeredAt"`
+	NotifiedLeader bool           `gorm:"default:false" json:"notifiedLeader"`
+	CreatedAt      time.Time      `json:"createdAt"`
 }

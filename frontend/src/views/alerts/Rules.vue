@@ -12,13 +12,28 @@
         <template v-else-if="column.key==='pipe'">{{ record.pipelineId ? '指定管道' : '全局' }}</template>
         <template v-else-if="column.key==='sev'"><a-tag :color="sevColor[record.severity]">{{ sevText[record.severity] }}</a-tag></template>
         <template v-else-if="column.key==='en'"><a-switch :checked="record.enabled" disabled /></template>
+        <template v-else-if="column.key==='silent'">
+          <template v-if="record.silentEnabled">
+            <a-tag color="purple">{{ record.silentStart }} - {{ record.silentEnd }}</a-tag>
+          </template>
+          <span v-else style="color:#999;">未设置</span>
+        </template>
+        <template v-else-if="column.key==='esc'">
+          <template v-if="record.escalationEnabled">
+            <a-tag color="orange">{{ record.escalationAfterMin }}分钟升级</a-tag>
+          </template>
+          <span v-else style="color:#999;">未开启</span>
+        </template>
         <template v-else-if="column.key==='op' && auth.isAdmin">
-          <a-popconfirm title="确认删除?" @confirm="()=>del(record.id)"><a-button type="link" danger size="small">删除</a-button></a-popconfirm>
+          <a-space>
+            <a-button type="link" size="small" @click="openEdit(record)">编辑</a-button>
+            <a-popconfirm title="确认删除?" @confirm="()=>del(record.id)"><a-button type="link" danger size="small">删除</a-button></a-popconfirm>
+          </a-space>
         </template>
       </template>
     </a-table>
 
-    <a-modal v-model:open="visible" title="新建告警规则" width="640px" @ok="save" :confirm-loading="saving">
+    <a-modal v-model:open="visible" :title="editingId ? '编辑告警规则' : '新建告警规则'" width="680px" @ok="save" :confirm-loading="saving">
       <a-form :model="form" layout="vertical">
         <a-row :gutter="16">
           <a-col :span="12"><a-form-item label="规则名称" required><a-input v-model:value="form.name" /></a-form-item></a-col>
@@ -48,6 +63,65 @@
           </a-form-item></a-col>
           <a-col :span="12"><a-form-item label="抑制窗口(分钟)"><a-input-number v-model:value="form.suppressWindowMin" :min="0" style="width:100%;" /></a-form-item></a-col>
           <a-col :span="12"><a-form-item label="通知值班人"><a-switch v-model:checked="form.notifyOnCall" /></a-form-item></a-col>
+        </a-row>
+
+        <a-divider>高级配置</a-divider>
+
+        <a-row :gutter="16">
+          <a-col :span="24">
+            <a-form-item label="自动升级">
+              <a-switch v-model:checked="form.escalationEnabled" />
+              <span style="margin-left:8px;font-size:12px;color:#999;">
+                告警触发后无人认领时自动升级
+              </span>
+            </a-form-item>
+          </a-col>
+          <template v-if="form.escalationEnabled">
+            <a-col :span="12">
+              <a-form-item label="升级等待时间(分钟)">
+                <a-input-number v-model:value="form.escalationAfterMin" :min="1" style="width:100%;" />
+              </a-form-item>
+            </a-col>
+            <a-col :span="12">
+              <a-form-item label="升级后级别">
+                <a-select v-model:value="form.escalationToSeverity" style="width:100%;">
+                  <a-select-option value="warning">警告</a-select-option>
+                  <a-select-option value="critical">严重</a-select-option>
+                </a-select>
+              </a-form-item>
+            </a-col>
+          </template>
+        </a-row>
+
+        <a-row :gutter="16" style="margin-top:8px;">
+          <a-col :span="24">
+            <a-form-item label="静默时间段">
+              <a-switch v-model:checked="form.silentEnabled" />
+              <span style="margin-left:8px;font-size:12px;color:#999;">
+                静默期内不发送通知，但照常记录告警
+              </span>
+            </a-form-item>
+          </a-col>
+          <template v-if="form.silentEnabled">
+            <a-col :span="10">
+              <a-form-item label="开始时间">
+                <a-time-picker v-model:value="form._silentStart" format="HH:mm" style="width:100%;" />
+              </a-form-item>
+            </a-col>
+            <a-col :span="10">
+              <a-form-item label="结束时间">
+                <a-time-picker v-model:value="form._silentEnd" format="HH:mm" style="width:100%;" />
+              </a-form-item>
+            </a-col>
+            <a-col :span="24">
+              <a-form-item label="静默结束后补发汇总通知">
+                <a-switch v-model:checked="form.silentSummaryEnabled" />
+              </a-form-item>
+            </a-col>
+          </template>
+        </a-row>
+
+        <a-row :gutter="16" style="margin-top:8px;">
           <a-col :span="24"><a-form-item label="描述"><a-textarea v-model:value="form.description" :rows="2" /></a-form-item></a-col>
         </a-row>
       </a-form>
@@ -56,11 +130,12 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import { alertApi, pipelineApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
+import dayjs from 'dayjs'
 
 const auth = useAuthStore()
 const loading = ref(false)
@@ -68,12 +143,20 @@ const saving = ref(false)
 const rules = ref([])
 const pipeOptions = ref([])
 const visible = ref(false)
-const form = reactive({
+const editingId = ref(null)
+
+const defaultForm = () => ({
   name:'', pipelineId:undefined, ruleType:'consecutive_fail', severity:'warning',
   consecutiveFailN:3, durationP95Multi:2.0, dataDelaySec:1800,
   _channels:['feishu','email'], channels:'["feishu","email"]',
-  suppressWindowMin:60, notifyOnCall:true, description:'', enabled:true
+  suppressWindowMin:60, notifyOnCall:true, description:'', enabled:true,
+  escalationEnabled:false, escalationAfterMin:15, escalationToSeverity:'critical',
+  silentEnabled:false, silentStart:'02:00', silentEnd:'06:00', silentSummaryEnabled:true,
+  _silentStart: dayjs('2000-01-01 02:00'),
+  _silentEnd: dayjs('2000-01-01 06:00')
 })
+
+const form = reactive(defaultForm())
 
 const typeText = {
   consecutive_fail:'连续失败', duration_over_p95:'耗时异常',
@@ -92,9 +175,10 @@ const cols = [
   { title:'管道', key:'pipe', width:100 },
   { title:'级别', key:'sev', width:90 },
   { title:'抑制窗口', dataIndex:'suppressWindowMin', width:110, customRender:({text})=>`${text}分钟` },
-  { title:'通知值班', dataIndex:'notifyOnCall', width:100, customRender:({text})=>text?'是':'否' },
+  { title:'静默期', key:'silent', width:140 },
+  { title:'自动升级', key:'esc', width:120 },
   { title:'启用', key:'en', width:80 },
-  { title:'操作', key:'op', width:90, fixed:'right' }
+  { title:'操作', key:'op', width:140, fixed:'right' }
 ]
 
 async function reload() {
@@ -104,21 +188,41 @@ async function reload() {
     rules.value = r.data || []
   } finally { loading.value = false }
 }
+
 function openCreate() {
-  Object.assign(form, { name:'', pipelineId:undefined, ruleType:'consecutive_fail', severity:'warning', _channels:['feishu','email'], description:'' })
+  Object.assign(form, defaultForm())
+  editingId.value = null
   visible.value = true
 }
+
+function openEdit(record) {
+  Object.assign(form, { ...defaultForm(), ...record })
+  form._channels = JSON.parse(record.channels || '[]')
+  form._silentStart = dayjs(`2000-01-01 ${record.silentStart || '02:00'}`)
+  form._silentEnd = dayjs(`2000-01-01 ${record.silentEnd || '06:00'}`)
+  editingId.value = record.id
+  visible.value = true
+}
+
 async function save() {
   if (!form.name) { message.warning('请填写规则名称'); return }
   form.channels = JSON.stringify(form._channels)
+  form.silentStart = form._silentStart ? form._silentStart.format('HH:mm') : '02:00'
+  form.silentEnd = form._silentEnd ? form._silentEnd.format('HH:mm') : '06:00'
   saving.value = true
   try {
-    await alertApi.createRule(form)
-    message.success('已创建')
+    if (editingId.value) {
+      await alertApi.updateRule(editingId.value, form)
+      message.success('已更新')
+    } else {
+      await alertApi.createRule(form)
+      message.success('已创建')
+    }
     visible.value = false
     reload()
   } finally { saving.value = false }
 }
+
 async function del(id) {
   await alertApi.deleteRule(id)
   message.success('已删除')

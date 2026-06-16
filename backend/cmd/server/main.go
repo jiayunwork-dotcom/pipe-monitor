@@ -39,6 +39,7 @@ func main() {
 	alertService := services.NewAlertService(cfg, db, rdb)
 	slaEngine := services.NewSLAEngine(db, rdb, alertService)
 	go slaEngine.StartScheduler()
+	go alertService.StartScheduler()
 
 	app := routes.SetupRouter(cfg, db, rdb, wsHub, alertService, slaEngine)
 

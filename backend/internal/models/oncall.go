@@ -21,6 +21,8 @@ type OnCallGroup struct {
 	Timezone     string       `gorm:"size:50;default:Asia/Shanghai" json:"timezone"`
 	StartDate    time.Time    `json:"startDate"`
 	Members      string       `gorm:"type:json;not null" json:"members"`
+	LeaderID     *uint        `gorm:"index" json:"leaderId"`
+	Leader       *User        `gorm:"foreignKey:LeaderID" json:"leader,omitempty"`
 	CreatedAt    time.Time    `json:"createdAt"`
 	UpdatedAt    time.Time    `json:"updatedAt"`
 }

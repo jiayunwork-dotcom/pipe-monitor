@@ -20,11 +20,63 @@ func setupAlertRoutes(r fiber.Router, svc *services.AlertService, db *gorm.DB) {
 		days := parseIntParam(c, "days", 30)
 		page := parseIntParam(c, "page", 1)
 		size := parseIntParam(c, "pageSize", 20)
+		aggregated := c.Query("aggregated") == "true"
+
+		if aggregated {
+			result, err := svc.ListAggregated(auth.TenantID, isSuper, status, severity, days, page, size)
+			if err != nil {
+				return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+			}
+			return c.JSON(result)
+		}
+
 		result, err := svc.List(auth.TenantID, isSuper, status, severity, days, page, size)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 		}
 		return c.JSON(result)
+	})
+
+	alerts.Get("/trend", func(c *fiber.Ctx) error {
+		auth := middleware.GetAuthCtx(c)
+		isSuper := auth.Role == "super_admin"
+		result, err := svc.GetTrendStats(auth.TenantID, isSuper)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(fiber.Map{"data": result})
+	})
+
+	alerts.Post("/batch-acknowledge", func(c *fiber.Ctx) error {
+		auth := middleware.GetAuthCtx(c)
+		var req struct {
+			IDs  []uint `json:"ids"`
+			Note string `json:"note"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "参数错误"})
+		}
+		count, err := svc.BatchAcknowledge(req.IDs, auth.UserID, req.Note)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(fiber.Map{"message": "已批量认领", "count": count})
+	})
+
+	alerts.Post("/batch-resolve", func(c *fiber.Ctx) error {
+		auth := middleware.GetAuthCtx(c)
+		var req struct {
+			IDs  []uint `json:"ids"`
+			Note string `json:"note"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "参数错误"})
+		}
+		count, err := svc.BatchResolve(req.IDs, auth.UserID, req.Note)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(fiber.Map{"message": "已批量关闭", "count": count})
 	})
 
 	alerts.Post("/:id/acknowledge", func(c *fiber.Ctx) error {
@@ -103,5 +155,14 @@ func setupAlertRoutes(r fiber.Router, svc *services.AlertService, db *gorm.DB) {
 		var notifs []models.AlertNotification
 		db.Where("alert_id = ?", id).Order("sent_at DESC").Find(&notifs)
 		return c.JSON(fiber.Map{"data": notifs})
+	})
+
+	alerts.Get("/:id/escalations", func(c *fiber.Ctx) error {
+		id := parseUintID(c, "id")
+		escalations, err := svc.GetEscalations(id)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(fiber.Map{"data": escalations})
 	})
 }

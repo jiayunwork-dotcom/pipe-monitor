@@ -40,11 +40,15 @@ export const alertApi = {
   list: params => http.get('/v1/alerts', { params }),
   acknowledge: (id, data) => http.post(`/v1/alerts/${id}/acknowledge`, data),
   resolve: (id, data) => http.post(`/v1/alerts/${id}/resolve`, data),
+  batchAcknowledge: data => http.post('/v1/alerts/batch-acknowledge', data),
+  batchResolve: data => http.post('/v1/alerts/batch-resolve', data),
+  trend: () => http.get('/v1/alerts/trend'),
   rules: params => http.get('/v1/alerts/rules', { params }),
   createRule: data => http.post('/v1/alerts/rules', data),
   updateRule: (id, data) => http.put(`/v1/alerts/rules/${id}`, data),
   deleteRule: id => http.delete(`/v1/alerts/rules/${id}`),
-  notifications: id => http.get(`/v1/alerts/${id}/notifications`)
+  notifications: id => http.get(`/v1/alerts/${id}/notifications`),
+  escalations: id => http.get(`/v1/alerts/${id}/escalations`)
 }
 
 export const oncallApi = {

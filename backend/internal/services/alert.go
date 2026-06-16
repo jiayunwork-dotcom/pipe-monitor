@@ -217,7 +217,11 @@ func (a *AlertService) triggerAlert(pipe *models.Pipeline, run *models.PipelineR
 	}
 
 	a.db.Create(&event)
-	a.notifyChannels(&event, rule, title, message)
+
+	inSilent := a.isInSilentPeriod(rule, now)
+	if !inSilent {
+		a.notifyChannels(&event, rule, title, message)
+	}
 
 	if a.wsFn != nil {
 		a.wsFn(tenantID, "new_alert", map[string]interface{}{
@@ -228,6 +232,7 @@ func (a *AlertService) triggerAlert(pipe *models.Pipeline, run *models.PipelineR
 			"pipelineId": pipe.ID,
 			"pipelineName": pipe.Name,
 			"triggeredAt": now,
+			"isSilent":   inSilent,
 		})
 	}
 }
@@ -468,4 +473,600 @@ func (a *AlertService) List(tenantID uint, isSuper bool, status, severity string
 		PageSize: pageSize,
 		Data:     alerts,
 	}, nil
+}
+
+func (a *AlertService) GetEscalations(alertID uint) ([]models.AlertEscalation, error) {
+	var escalations []models.AlertEscalation
+	err := a.db.Where("alert_id = ?", alertID).Order("triggered_at DESC").Find(&escalations).Error
+	return escalations, err
+}
+
+func (a *AlertService) getOnCallLeader(pipelineID, tenantID uint) *models.User {
+	var assignments []models.OnCallAssignment
+	a.db.Where("(pipeline_id = ? OR pipeline_id IS NULL) AND tenant_id = ? AND start_date <= ? AND end_date >= ?",
+		pipelineID, tenantID, time.Now(), time.Now()).Find(&assignments)
+
+	if len(assignments) == 0 {
+		return nil
+	}
+
+	groupIDs := make(map[uint]bool)
+	for _, asn := range assignments {
+		groupIDs[asn.GroupID] = true
+	}
+
+	var groups []models.OnCallGroup
+	a.db.Where("id IN ?", keysToSlice(groupIDs)).Preload("Leader").Find(&groups)
+
+	for _, g := range groups {
+		if g.LeaderID != nil && g.Leader != nil {
+			return g.Leader
+		}
+	}
+
+	var admin models.User
+	err := a.db.Where("tenant_id = ? AND role = ? AND status = ?", tenantID, models.RoleAdmin, "active").First(&admin).Error
+	if err != nil {
+		return nil
+	}
+	return &admin
+}
+
+func keysToSlice[K comparable, V any](m map[K]V) []K {
+	keys := make([]K, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func (a *AlertService) escalateAlert(event *models.AlertEvent, rule *models.AlertRule) error {
+	now := time.Now()
+	fromSev := event.Severity
+	toSev := rule.EscalationToSeverity
+	if toSev == "" {
+		toSev = models.AlertCritical
+	}
+
+	if fromSev == toSev {
+		return nil
+	}
+
+	tx := a.db.Begin()
+
+	event.Severity = toSev
+	event.UpdatedAt = now
+	if err := tx.Save(event).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	escalation := models.AlertEscalation{
+		AlertID:      event.ID,
+		TenantID:     event.TenantID,
+		FromSeverity: fromSev,
+		ToSeverity:   toSev,
+		Reason:       fmt.Sprintf("触发后%d分钟未认领自动升级", rule.EscalationAfterMin),
+		TriggeredBy:  "system",
+		TriggeredAt:  now,
+		CreatedAt:    now,
+	}
+
+	leader := a.getOnCallLeader(*event.PipelineID, event.TenantID)
+	if leader != nil {
+		escalation.NotifiedLeader = true
+		escalation.TriggeredByID = &leader.ID
+	}
+
+	if err := tx.Create(&escalation).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	tx.Commit()
+
+	title := fmt.Sprintf("[告警升级] %s", event.Title)
+	msg := fmt.Sprintf("告警已从%s升级为%s，原因：%s\n\n原告警内容：%s",
+		severityText(fromSev), severityText(toSev), escalation.Reason, event.Message)
+
+	a.notifyChannels(event, rule, title, msg)
+
+	if leader != nil && leader.Email != "" {
+		a.sendEmail([]string{leader.Email}, title, msg)
+	}
+
+	if a.wsFn != nil {
+		a.wsFn(event.TenantID, "alert_escalated", map[string]interface{}{
+			"id":           event.ID,
+			"fromSeverity": fromSev,
+			"toSeverity":   toSev,
+			"escalationId": escalation.ID,
+		})
+	}
+
+	return nil
+}
+
+func severityText(sev models.AlertSeverity) string {
+	switch sev {
+	case models.AlertInfo:
+		return "提示"
+	case models.AlertWarning:
+		return "警告"
+	case models.AlertCritical:
+		return "严重"
+	default:
+		return string(sev)
+	}
+}
+
+func (a *AlertService) CheckAndEscalate() {
+	now := time.Now()
+	var rules []models.AlertRule
+	a.db.Where("escalation_enabled = ? AND enabled = ?", true, true).Find(&rules)
+
+	ruleMap := make(map[uint]*models.AlertRule)
+	for i := range rules {
+		ruleMap[rules[i].ID] = &rules[i]
+	}
+
+	var events []models.AlertEvent
+	a.db.Where("status = ? AND triggered_at <= ?",
+		models.AlertTriggered, now.Add(-15*time.Minute)).
+		Preload("Rule").
+		Find(&events)
+
+	for i := range events {
+		event := &events[i]
+		rule := event.Rule
+		if rule == nil {
+			if r, ok := ruleMap[event.RuleID]; ok {
+				rule = r
+			}
+		}
+		if rule == nil || !rule.EscalationEnabled {
+			continue
+		}
+
+		escalateAfter := time.Duration(rule.EscalationAfterMin) * time.Minute
+		if escalateAfter <= 0 {
+			escalateAfter = 15 * time.Minute
+		}
+
+		if now.Sub(event.TriggeredAt) < escalateAfter {
+			continue
+		}
+
+		var existingEsc int64
+		a.db.Model(&models.AlertEscalation{}).Where("alert_id = ?", event.ID).Count(&existingEsc)
+		if existingEsc > 0 {
+			continue
+		}
+
+		go a.escalateAlert(event, rule)
+	}
+}
+
+func (a *AlertService) isInSilentPeriod(rule *models.AlertRule, t time.Time) bool {
+	if !rule.SilentEnabled {
+		return false
+	}
+	startStr := rule.SilentStart
+	endStr := rule.SilentEnd
+	if startStr == "" || endStr == "" {
+		return false
+	}
+
+	startTime := parseTimeOfDay(startStr)
+	endTime := parseTimeOfDay(endStr)
+	current := time.Date(0, 1, 1, t.Hour(), t.Minute(), t.Second(), 0, time.Local)
+
+	if startTime.Before(endTime) {
+		return !current.Before(startTime) && !current.After(endTime)
+	} else {
+		return !current.Before(startTime) || !current.After(endTime)
+	}
+}
+
+func parseTimeOfDay(s string) time.Time {
+	parts := strings.Split(s, ":")
+	if len(parts) < 2 {
+		return time.Date(0, 1, 1, 0, 0, 0, 0, time.Local)
+	}
+	h := 0
+	m := 0
+	fmt.Sscanf(parts[0], "%d", &h)
+	fmt.Sscanf(parts[1], "%d", &m)
+	return time.Date(0, 1, 1, h, m, 0, 0, time.Local)
+}
+
+func (a *AlertService) getAlertsForSilentSummary(ruleID uint, since time.Time) []models.AlertEvent {
+	var alerts []models.AlertEvent
+	a.db.Where("rule_id = ? AND triggered_at >= ? AND status IN ?",
+		ruleID, since,
+		[]string{string(models.AlertTriggered), string(models.AlertAcknowledged)}).
+		Order("triggered_at DESC").Find(&alerts)
+	return alerts
+}
+
+func (a *AlertService) CheckSilentPeriodEnd() {
+	now := time.Now()
+	var rules []models.AlertRule
+	a.db.Where("silent_enabled = ? AND silent_summary_enabled = ? AND enabled = ?",
+		true, true, true).Find(&rules)
+
+	for i := range rules {
+		rule := &rules[i]
+		if !a.justExitedSilentPeriod(rule, now) {
+			continue
+		}
+
+		startTime := parseTimeOfDay(rule.SilentStart)
+		silentStartToday := time.Date(now.Year(), now.Month(), now.Day(),
+			startTime.Hour(), startTime.Minute(), 0, 0, now.Location())
+
+		alerts := a.getAlertsForSilentSummary(rule.ID, silentStartToday)
+		if len(alerts) == 0 {
+			continue
+		}
+
+		title := fmt.Sprintf("[静默期汇总] %d条未恢复告警", len(alerts))
+		var msgBuilder strings.Builder
+		msgBuilder.WriteString(fmt.Sprintf("静默期(%s-%s)内共有%d条未恢复告警：\n\n",
+			rule.SilentStart, rule.SilentEnd, len(alerts)))
+		for i, alert := range alerts {
+			if i >= 10 {
+				msgBuilder.WriteString(fmt.Sprintf("... 还有%d条更多\n", len(alerts)-10))
+				break
+			}
+			msgBuilder.WriteString(fmt.Sprintf("[%s] %s\n", severityText(alert.Severity), alert.Title))
+		}
+
+		var channels []string
+		json.Unmarshal([]byte(rule.Channels), &channels)
+		for _, ch := range channels {
+			switch models.AlertChannelType(ch) {
+			case models.AlertWebhookFeishu:
+				a.sendFeishu(title, msgBuilder.String())
+			case models.AlertWebhookDingTalk:
+				a.sendDingTalk(title, msgBuilder.String())
+			case models.AlertWebhookSlack:
+				a.sendSlack(title, msgBuilder.String())
+			}
+		}
+	}
+}
+
+func (a *AlertService) justExitedSilentPeriod(rule *models.AlertRule, now time.Time) bool {
+	endTime := parseTimeOfDay(rule.SilentEnd)
+	endToday := time.Date(now.Year(), now.Month(), now.Day(),
+		endTime.Hour(), endTime.Minute(), 0, 0, now.Location())
+
+	diff := now.Sub(endToday)
+	return diff >= 0 && diff <= 2*time.Minute
+}
+
+func (a *AlertService) StartScheduler() {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		a.CheckAndEscalate()
+		a.CheckSilentPeriodEnd()
+	}
+}
+
+type AlertTrendData struct {
+	Dates       []string `json:"dates"`
+	InfoCounts  []int    `json:"infoCounts"`
+	WarnCounts  []int    `json:"warnCounts"`
+	CritCounts  []int    `json:"critCounts"`
+	TotalCounts []int    `json:"totalCounts"`
+}
+
+type AlertWeekComparison struct {
+	ThisWeekCount  int     `json:"thisWeekCount"`
+	LastWeekCount  int     `json:"lastWeekCount"`
+	ChangePercent  float64 `json:"changePercent"`
+	IsIncrease     bool    `json:"isIncrease"`
+}
+
+type AlertTrendResponse struct {
+	Trend      AlertTrendData      `json:"trend"`
+	Comparison AlertWeekComparison `json:"comparison"`
+}
+
+func (a *AlertService) GetTrendStats(tenantID uint, isSuper bool) (*AlertTrendResponse, error) {
+	now := time.Now()
+	loc := now.Location()
+
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	dates := make([]string, 7)
+	infoCounts := make([]int, 7)
+	warnCounts := make([]int, 7)
+	critCounts := make([]int, 7)
+	totalCounts := make([]int, 7)
+
+	for i := 6; i >= 0; i-- {
+		day := today.AddDate(0, 0, -i)
+		dates[6-i] = day.Format("01-02")
+	}
+
+	type dailyStat struct {
+		Date     string
+		Severity string
+		Count    int
+	}
+
+	startDate := today.AddDate(0, 0, -6)
+	endDate := today.AddDate(0, 0, 1)
+
+	var results []dailyStat
+	q := a.db.Model(&models.AlertEvent{}).
+		Select("DATE(triggered_at) as date, severity, COUNT(*) as count").
+		Where("triggered_at >= ? AND triggered_at < ?", startDate, endDate)
+	if !isSuper {
+		q = q.Where("tenant_id = ?", tenantID)
+	}
+	q.Group("date, severity").Order("date").Scan(&results)
+
+	for _, r := range results {
+		t, err := time.Parse("2006-01-02", r.Date)
+		if err != nil {
+			continue
+		}
+		dateStr := t.Format("01-02")
+		idx := -1
+		for i, d := range dates {
+			if d == dateStr {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			continue
+		}
+		switch r.Severity {
+		case string(models.AlertInfo):
+			infoCounts[idx] = r.Count
+		case string(models.AlertWarning):
+			warnCounts[idx] = r.Count
+		case string(models.AlertCritical):
+			critCounts[idx] = r.Count
+		}
+		totalCounts[idx] += r.Count
+	}
+
+	weekday := int(now.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	thisWeekStart := today.AddDate(0, 0, -(weekday - 1))
+	lastWeekStart := thisWeekStart.AddDate(0, 0, -7)
+	lastWeekEnd := thisWeekStart
+
+	var thisWeekCount int64
+	q2 := a.db.Model(&models.AlertEvent{}).
+		Where("triggered_at >= ? AND triggered_at < ?", thisWeekStart, endDate)
+	if !isSuper {
+		q2 = q2.Where("tenant_id = ?", tenantID)
+	}
+	q2.Count(&thisWeekCount)
+
+	var lastWeekCount int64
+	q3 := a.db.Model(&models.AlertEvent{}).
+		Where("triggered_at >= ? AND triggered_at < ?", lastWeekStart, lastWeekEnd)
+	if !isSuper {
+		q3 = q3.Where("tenant_id = ?", tenantID)
+	}
+	q3.Count(&lastWeekCount)
+
+	changePercent := 0.0
+	isIncrease := false
+	if lastWeekCount > 0 {
+		changePercent = float64(thisWeekCount-lastWeekCount) / float64(lastWeekCount) * 100
+		isIncrease = thisWeekCount > lastWeekCount
+	} else if thisWeekCount > 0 {
+		changePercent = 100.0
+		isIncrease = true
+	}
+
+	return &AlertTrendResponse{
+		Trend: AlertTrendData{
+			Dates:       dates,
+			InfoCounts:  infoCounts,
+			WarnCounts:  warnCounts,
+			CritCounts:  critCounts,
+			TotalCounts: totalCounts,
+		},
+		Comparison: AlertWeekComparison{
+			ThisWeekCount: int(thisWeekCount),
+			LastWeekCount: int(lastWeekCount),
+			ChangePercent: changePercent,
+			IsIncrease:    isIncrease,
+		},
+	}, nil
+}
+
+type AlertAggregateGroup struct {
+	GroupKey    string              `json:"groupKey"`
+	PipelineID  *uint               `json:"pipelineId"`
+	RuleID      uint                `json:"ruleId"`
+	RuleType    string              `json:"ruleType"`
+	Severity    string              `json:"severity"`
+	Count       int                 `json:"count"`
+	LatestAlert *models.AlertEvent  `json:"latestAlert"`
+	Alerts      []models.AlertEvent `json:"alerts"`
+}
+
+type PaginatedAlertGroups struct {
+	Total    int64                `json:"total"`
+	Page     int                  `json:"page"`
+	PageSize int                  `json:"pageSize"`
+	Data     []AlertAggregateGroup `json:"data"`
+}
+
+func (a *AlertService) ListAggregated(tenantID uint, isSuper bool, status, severity string, days, page, pageSize int) (*PaginatedAlertGroups, error) {
+	now := time.Now()
+	windowStart := now.Add(-30 * time.Minute)
+
+	var allAlerts []models.AlertEvent
+	q := a.db.Model(&models.AlertEvent{})
+	if !isSuper {
+		q = q.Where("tenant_id = ?", tenantID)
+	}
+	if status != "" {
+		q = q.Where("status = ?", status)
+	}
+	if severity != "" {
+		q = q.Where("severity = ?", severity)
+	}
+	if days > 0 {
+		since := now.AddDate(0, 0, -days)
+		q = q.Where("triggered_at >= ?", since)
+	}
+	q.Preload("Pipeline").Preload("AcknowledgedBy").Preload("ResolvedBy").Preload("Rule").
+		Order("triggered_at DESC").Find(&allAlerts)
+
+	type groupKey struct {
+		pipelineID uint
+		ruleID     uint
+		ruleType   string
+		severity   string
+	}
+
+	groups := make(map[string]*AlertAggregateGroup)
+	groupList := make([]string, 0)
+
+	for i := range allAlerts {
+		alert := allAlerts[i]
+		var pid uint
+		if alert.PipelineID != nil {
+			pid = *alert.PipelineID
+		}
+
+		ruleType := ""
+		if alert.Rule != nil {
+			ruleType = string(alert.Rule.RuleType)
+		}
+
+		key := fmt.Sprintf("%d|%d|%s|%s", pid, alert.RuleID, ruleType, alert.Severity)
+
+		group, exists := groups[key]
+		if !exists {
+			sev := string(alert.Severity)
+			group = &AlertAggregateGroup{
+				GroupKey:   key,
+				PipelineID: alert.PipelineID,
+				RuleID:     alert.RuleID,
+				RuleType:   ruleType,
+				Severity:   sev,
+				Alerts:     make([]models.AlertEvent, 0),
+			}
+			groups[key] = group
+			groupList = append(groupList, key)
+		}
+
+		group.Alerts = append(group.Alerts, alert)
+		if group.LatestAlert == nil || alert.TriggeredAt.After(group.LatestAlert.TriggeredAt) {
+			group.LatestAlert = &alert
+		}
+		group.Count++
+	}
+
+	resultGroups := make([]AlertAggregateGroup, 0)
+	for _, key := range groupList {
+		group := groups[key]
+
+		if group.Count < 3 {
+			for _, alert := range group.Alerts {
+				singleGroup := AlertAggregateGroup{
+					GroupKey:    fmt.Sprintf("single-%d", alert.ID),
+					PipelineID:  alert.PipelineID,
+					RuleID:      alert.RuleID,
+					RuleType:    group.RuleType,
+					Severity:    string(alert.Severity),
+					Count:       1,
+					LatestAlert: &alert,
+					Alerts:      []models.AlertEvent{alert},
+				}
+				resultGroups = append(resultGroups, singleGroup)
+			}
+		} else {
+			inWindow := 0
+			for _, alert := range group.Alerts {
+				if alert.TriggeredAt.After(windowStart) {
+					inWindow++
+				}
+			}
+			if inWindow >= 3 {
+				resultGroups = append(resultGroups, *group)
+			} else {
+				for _, alert := range group.Alerts {
+					singleGroup := AlertAggregateGroup{
+						GroupKey:    fmt.Sprintf("single-%d", alert.ID),
+						PipelineID:  alert.PipelineID,
+						RuleID:      alert.RuleID,
+						RuleType:    group.RuleType,
+						Severity:    string(alert.Severity),
+						Count:       1,
+						LatestAlert: &alert,
+						Alerts:      []models.AlertEvent{alert},
+					}
+					resultGroups = append(resultGroups, singleGroup)
+				}
+			}
+		}
+	}
+
+	total := int64(len(resultGroups))
+	start := (page - 1) * pageSize
+	end := start + pageSize
+	if start > len(resultGroups) {
+		start = len(resultGroups)
+	}
+	if end > len(resultGroups) {
+		end = len(resultGroups)
+	}
+	pagedData := resultGroups[start:end]
+
+	return &PaginatedAlertGroups{
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+		Data:     pagedData,
+	}, nil
+}
+
+func (a *AlertService) BatchAcknowledge(alertIDs []uint, userID uint, note string) (int, error) {
+	if len(alertIDs) == 0 {
+		return 0, nil
+	}
+	now := time.Now()
+	result := a.db.Model(&models.AlertEvent{}).
+		Where("id IN ? AND status = ?", alertIDs, models.AlertTriggered).
+		Updates(map[string]interface{}{
+			"status":             models.AlertAcknowledged,
+			"acknowledged_at":    now,
+			"acknowledged_by_id": userID,
+			"ack_note":           note,
+			"updated_at":         now,
+		})
+	return int(result.RowsAffected), result.Error
+}
+
+func (a *AlertService) BatchResolve(alertIDs []uint, userID uint, note string) (int, error) {
+	if len(alertIDs) == 0 {
+		return 0, nil
+	}
+	now := time.Now()
+	result := a.db.Model(&models.AlertEvent{}).
+		Where("id IN ? AND status IN ?", alertIDs, []string{string(models.AlertTriggered), string(models.AlertAcknowledged)}).
+		Updates(map[string]interface{}{
+			"status":         models.AlertResolved,
+			"resolved_at":    now,
+			"resolved_by_id": userID,
+			"resolve_note":   note,
+			"updated_at":     now,
+		})
+	return int(result.RowsAffected), result.Error
 }
