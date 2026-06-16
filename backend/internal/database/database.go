@@ -65,34 +65,55 @@ func AutoMigrate(db *gorm.DB) error {
 		return err
 	}
 
-	fkStatements := []string{
-		`ALTER TABLE IF EXISTS users ADD CONSTRAINT IF NOT EXISTS fk_users_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE`,
-		`ALTER TABLE IF EXISTS pipelines ADD CONSTRAINT IF NOT EXISTS fk_pipelines_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE`,
-		`ALTER TABLE IF EXISTS pipelines ADD CONSTRAINT IF NOT EXISTS fk_pipelines_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE RESTRICT`,
-		`ALTER TABLE IF EXISTS pipelines ADD CONSTRAINT IF NOT EXISTS fk_pipelines_source FOREIGN KEY (source_id) REFERENCES data_sources(id) ON DELETE SET NULL`,
-		`ALTER TABLE IF EXISTS pipelines ADD CONSTRAINT IF NOT EXISTS fk_pipelines_target FOREIGN KEY (target_id) REFERENCES data_sources(id) ON DELETE SET NULL`,
-		`ALTER TABLE IF EXISTS pipeline_dependencies ADD CONSTRAINT IF NOT EXISTS fk_deps_pipe FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE`,
-		`ALTER TABLE IF EXISTS pipeline_dependencies ADD CONSTRAINT IF NOT EXISTS fk_deps_upstream FOREIGN KEY (upstream_id) REFERENCES pipelines(id) ON DELETE CASCADE`,
-		`ALTER TABLE IF EXISTS pipeline_runs ADD CONSTRAINT IF NOT EXISTS fk_runs_pipe FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE`,
-		`ALTER TABLE IF EXISTS pipeline_runs ADD CONSTRAINT IF NOT EXISTS fk_runs_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE`,
-		`ALTER TABLE IF EXISTS sla_rules ADD CONSTRAINT IF NOT EXISTS fk_sla_rules_pipe FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE`,
-		`ALTER TABLE IF EXISTS sla_evaluations ADD CONSTRAINT IF NOT EXISTS fk_sla_eval_run FOREIGN KEY (run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE`,
-		`ALTER TABLE IF EXISTS sla_evaluations ADD CONSTRAINT IF NOT EXISTS fk_sla_eval_rule FOREIGN KEY (rule_id) REFERENCES sla_rules(id) ON DELETE CASCADE`,
-		`ALTER TABLE IF EXISTS sla_monthly_reports ADD CONSTRAINT IF NOT EXISTS fk_sla_rep_pipe FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE`,
-		`ALTER TABLE IF EXISTS alert_events ADD CONSTRAINT IF NOT EXISTS fk_alert_ev_rule FOREIGN KEY (rule_id) REFERENCES alert_rules(id) ON DELETE SET NULL`,
-		`ALTER TABLE IF EXISTS alert_events ADD CONSTRAINT IF NOT EXISTS fk_alert_ev_pipe FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE SET NULL`,
-		`ALTER TABLE IF EXISTS alert_events ADD CONSTRAINT IF NOT EXISTS fk_alert_ev_ack FOREIGN KEY (acknowledged_by_id) REFERENCES users(id) ON DELETE SET NULL`,
-		`ALTER TABLE IF EXISTS alert_events ADD CONSTRAINT IF NOT EXISTS fk_alert_ev_res FOREIGN KEY (resolved_by_id) REFERENCES users(id) ON DELETE SET NULL`,
-		`ALTER TABLE IF EXISTS alert_notifications ADD CONSTRAINT IF NOT EXISTS fk_alert_notif_alert FOREIGN KEY (alert_id) REFERENCES alert_events(id) ON DELETE CASCADE`,
-		`ALTER TABLE IF EXISTS on_call_assignments ADD CONSTRAINT IF NOT EXISTS fk_occ_group FOREIGN KEY (group_id) REFERENCES on_call_groups(id) ON DELETE CASCADE`,
-		`ALTER TABLE IF EXISTS on_call_assignments ADD CONSTRAINT IF NOT EXISTS fk_occ_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE`,
-		`ALTER TABLE IF EXISTS on_call_assignments ADD CONSTRAINT IF NOT EXISTS fk_occ_pipe FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE SET NULL`,
-		`ALTER TABLE IF EXISTS handover_summaries ADD CONSTRAINT IF NOT EXISTS fk_handover_from FOREIGN KEY (from_user_id) REFERENCES users(id) ON DELETE RESTRICT`,
-		`ALTER TABLE IF EXISTS handover_summaries ADD CONSTRAINT IF NOT EXISTS fk_handover_to FOREIGN KEY (to_user_id) REFERENCES users(id) ON DELETE RESTRICT`,
-		`ALTER TABLE IF EXISTS audit_logs ADD CONSTRAINT IF NOT EXISTS fk_audit_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL`,
+	fkDefinitions := []struct {
+		table      string
+		constraint string
+		column     string
+		refTable   string
+		refColumn  string
+		onDelete   string
+	}{
+		{"users", "fk_users_tenant", "tenant_id", "tenants", "id", "CASCADE"},
+		{"pipelines", "fk_pipelines_tenant", "tenant_id", "tenants", "id", "CASCADE"},
+		{"pipelines", "fk_pipelines_owner", "owner_id", "users", "id", "RESTRICT"},
+		{"pipelines", "fk_pipelines_source", "source_id", "data_sources", "id", "SET NULL"},
+		{"pipelines", "fk_pipelines_target", "target_id", "data_sources", "id", "SET NULL"},
+		{"pipeline_dependencies", "fk_deps_pipe", "pipeline_id", "pipelines", "id", "CASCADE"},
+		{"pipeline_dependencies", "fk_deps_upstream", "upstream_id", "pipelines", "id", "CASCADE"},
+		{"pipeline_runs", "fk_runs_pipe", "pipeline_id", "pipelines", "id", "CASCADE"},
+		{"sla_rules", "fk_sla_rules_pipe", "pipeline_id", "pipelines", "id", "CASCADE"},
+		{"sla_evaluations", "fk_sla_eval_run", "run_id", "pipeline_runs", "id", "CASCADE"},
+		{"sla_evaluations", "fk_sla_eval_rule", "rule_id", "sla_rules", "id", "CASCADE"},
+		{"sla_monthly_reports", "fk_sla_rep_pipe", "pipeline_id", "pipelines", "id", "CASCADE"},
+		{"alert_events", "fk_alert_ev_rule", "rule_id", "alert_rules", "id", "SET NULL"},
+		{"alert_events", "fk_alert_ev_pipe", "pipeline_id", "pipelines", "id", "SET NULL"},
+		{"alert_events", "fk_alert_ev_ack", "acknowledged_by_id", "users", "id", "SET NULL"},
+		{"alert_events", "fk_alert_ev_res", "resolved_by_id", "users", "id", "SET NULL"},
+		{"alert_notifications", "fk_alert_notif_alert", "alert_id", "alert_events", "id", "CASCADE"},
+		{"on_call_assignments", "fk_occ_group", "group_id", "on_call_groups", "id", "CASCADE"},
+		{"on_call_assignments", "fk_occ_user", "user_id", "users", "id", "CASCADE"},
+		{"on_call_assignments", "fk_occ_pipe", "pipeline_id", "pipelines", "id", "SET NULL"},
+		{"handover_summaries", "fk_handover_from", "from_user_id", "users", "id", "RESTRICT"},
+		{"handover_summaries", "fk_handover_to", "to_user_id", "users", "id", "RESTRICT"},
+		{"audit_logs", "fk_audit_user", "user_id", "users", "id", "SET NULL"},
 	}
 
-	for _, sql := range fkStatements {
+	for _, fk := range fkDefinitions {
+		var count int64
+		if err := db.Raw(
+			`SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_name = ? AND table_name = ?`,
+			fk.constraint, fk.table,
+		).Scan(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			continue
+		}
+
+		sql := fmt.Sprintf(
+			`ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s(%s) ON DELETE %s`,
+			fk.table, fk.constraint, fk.column, fk.refTable, fk.refColumn, fk.onDelete,
+		)
 		if err := db.Exec(sql).Error; err != nil {
 			return err
 		}

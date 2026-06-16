@@ -1,10 +1,12 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"pipe-monitor/internal/models"
 	"pipe-monitor/internal/utils"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -210,9 +212,14 @@ type DAGResult struct {
 	Levels   map[int][]uint    `json:"levels"`
 }
 
+const MaxDAGNodes = 5000
+
 func (s *PipelineService) BuildDAG(tenantID uint, isSuper bool, startPipelineID uint, includeUpstream, includeDownstream bool, maxDepth int) (*DAGResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	var allPipes []models.Pipeline
-	db := s.db.Session(&gorm.Session{NewDB: true})
+	db := s.db.WithContext(ctx).Session(&gorm.Session{NewDB: true})
 	if !isSuper {
 		db = db.Where("tenant_id = ?", tenantID)
 	}
@@ -220,13 +227,17 @@ func (s *PipelineService) BuildDAG(tenantID uint, isSuper bool, startPipelineID 
 		return nil, err
 	}
 
-	pipeMap := make(map[uint]*models.Pipeline)
+	if len(allPipes) > MaxDAGNodes {
+		return nil, fmt.Errorf("管道数量过多(%d)，超过最大限制%d", len(allPipes), MaxDAGNodes)
+	}
+
+	pipeMap := make(map[uint]*models.Pipeline, len(allPipes))
 	for i := range allPipes {
 		pipeMap[allPipes[i].ID] = &allPipes[i]
 	}
 
 	var allDeps []models.PipelineDependency
-	depDB := s.db.Session(&gorm.Session{NewDB: true})
+	depDB := s.db.WithContext(ctx).Session(&gorm.Session{NewDB: true})
 	if !isSuper {
 		depDB = depDB.Where("tenant_id = ?", tenantID)
 	}
@@ -246,6 +257,7 @@ func (s *PipelineService) BuildDAG(tenantID uint, isSuper bool, startPipelineID 
 		visited := make(map[uint]bool)
 		s.bfsCollect(startPipelineID, maxDepth, includeUpstream, includeDownstream, visited, pipeMap, children, parents, nodes)
 	} else {
+		nodes = make(map[uint]*DAGNode, len(pipeMap))
 		for id, p := range pipeMap {
 			nodes[id] = &DAGNode{
 				ID:       id,
@@ -259,7 +271,7 @@ func (s *PipelineService) BuildDAG(tenantID uint, isSuper bool, startPipelineID 
 	}
 
 	levels := make(map[int][]uint)
-	inDegree := make(map[uint]int)
+	inDegree := make(map[uint]int, len(nodes))
 	for id, node := range nodes {
 		degree := 0
 		for _, pid := range node.Parents {
@@ -277,7 +289,7 @@ func (s *PipelineService) BuildDAG(tenantID uint, isSuper bool, startPipelineID 
 		}
 	}
 
-	topo := make([]uint, 0)
+	topo := make([]uint, 0, len(nodes))
 	currentLevel := 0
 	for len(queue) > 0 {
 		sz := len(queue)
@@ -300,6 +312,10 @@ func (s *PipelineService) BuildDAG(tenantID uint, isSuper bool, startPipelineID 
 			}
 		}
 		currentLevel++
+	}
+
+	if len(topo) != len(nodes) {
+		return nil, fmt.Errorf("DAG中存在循环依赖，仅能处理%d/%d个节点", len(topo), len(nodes))
 	}
 
 	return &DAGResult{Nodes: nodes, TopoSort: topo, Levels: levels}, nil
@@ -426,6 +442,9 @@ type CriticalPathResult struct {
 }
 
 func (s *PipelineService) CriticalPath(tenantID uint, isSuper bool) (*CriticalPathResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
 	dag, err := s.BuildDAG(tenantID, isSuper, 0, true, true, 0)
 	if err != nil {
 		return nil, err
@@ -441,7 +460,7 @@ func (s *PipelineService) CriticalPath(tenantID uint, isSuper bool) (*CriticalPa
 	}
 
 	var pipes []models.Pipeline
-	db := s.db.Session(&gorm.Session{NewDB: true})
+	db := s.db.WithContext(ctx).Session(&gorm.Session{NewDB: true})
 	if err := db.Select("id, expected_run_sec").Where("id IN ?", nodeIDs).Find(&pipes).Error; err != nil {
 		return nil, err
 	}
@@ -466,6 +485,12 @@ func (s *PipelineService) CriticalPath(tenantID uint, isSuper bool) (*CriticalPa
 	maxEnd := 0
 
 	for _, u := range dag.TopoSort {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("关键路径计算超时")
+		default:
+		}
+
 		if _, ok := dag.Nodes[u]; !ok {
 			continue
 		}
