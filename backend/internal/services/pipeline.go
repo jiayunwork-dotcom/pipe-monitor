@@ -60,7 +60,7 @@ func (s *PipelineService) Create(req *CreatePipelineReq) (*models.Pipeline, erro
 		OwnerID:        req.OwnerID,
 		Team:           req.Team,
 		Status:         req.Status,
-		Tags:           utils.ToJSON(req.Tags),
+		Tags:           utils.JSONString(utils.ToJSON(req.Tags)),
 		WebhookToken:   utils.GenerateToken(32),
 		ExpectedRunSec: req.ExpectedRunSec,
 	}
