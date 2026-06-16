@@ -2,6 +2,7 @@ package utils
 
 import (
 	"crypto/rand"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,39 @@ import (
 	"strconv"
 	"time"
 )
+
+type JSONString string
+
+func (j JSONString) Value() (driver.Value, error) {
+	if j == "" {
+		return "{}", nil
+	}
+	return string(j), nil
+}
+
+func (j *JSONString) Scan(value interface{}) error {
+	if value == nil {
+		*j = "{}"
+		return nil
+	}
+	switch v := value.(type) {
+	case string:
+		if v == "" {
+			*j = "{}"
+		} else {
+			*j = JSONString(v)
+		}
+	case []byte:
+		if len(v) == 0 {
+			*j = "{}"
+		} else {
+			*j = JSONString(string(v))
+		}
+	default:
+		return fmt.Errorf("unsupported scan type for JSONString: %T", value)
+	}
+	return nil
+}
 
 func GenerateToken(n int) string {
 	b := make([]byte, n)

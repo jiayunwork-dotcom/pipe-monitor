@@ -1,6 +1,7 @@
 package models
 
 import (
+	"pipe-monitor/internal/utils"
 	"time"
 )
 
@@ -14,7 +15,7 @@ type DataSource struct {
 	Database    string    `gorm:"size:200" json:"database"`
 	Table       string    `gorm:"size:200" json:"table"`
 	Description string    `gorm:"type:text" json:"description"`
-	Config      string    `gorm:"type:json" json:"config"`
+	Config      utils.JSONString `gorm:"type:json" json:"config"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
@@ -56,7 +57,7 @@ type Pipeline struct {
 	Owner           User           `gorm:"foreignKey:OwnerID" json:"owner,omitempty"`
 	Team            string         `gorm:"size:100;index:idx_pipeline_team" json:"team"`
 	Status          PipelineStatus `gorm:"size:20;not null;default:active;index:idx_pipeline_status" json:"status"`
-	Tags            string         `gorm:"type:json" json:"tags"`
+	Tags            utils.JSONString `gorm:"type:json" json:"tags"`
 	WebhookToken    string         `gorm:"size:100" json:"-"`
 	ExpectedRunSec  int            `gorm:"default:0" json:"expectedRunSec"`
 	CreatedAt       time.Time      `json:"createdAt"`
