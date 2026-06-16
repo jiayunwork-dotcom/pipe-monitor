@@ -4,10 +4,18 @@ import (
 	"encoding/json"
 	"log"
 	"sync"
+	"time"
 
 	redisClient "pipe-monitor/internal/redis"
 
 	"github.com/gofiber/contrib/websocket"
+)
+
+const (
+	pingPeriod   = 30 * time.Second
+	pongWait     = 60 * time.Second
+	writeWait    = 10 * time.Second
+	maxMessageSize = 8192
 )
 
 type WSMessage struct {
@@ -16,13 +24,14 @@ type WSMessage struct {
 }
 
 type Client struct {
-	ID       string
-	TenantID uint
-	UserID   uint
-	Conn     *websocket.Conn
-	Hub      *Hub
-	Send     chan []byte
-	mu       sync.Mutex
+	ID          string
+	TenantID    uint
+	UserID      uint
+	Conn        *websocket.Conn
+	Hub         *Hub
+	Send        chan []byte
+	mu          sync.Mutex
+	lastPong    int64
 }
 
 type Hub struct {
@@ -114,6 +123,13 @@ func (c *Client) ReadPump() {
 		c.Conn.Close()
 	}()
 
+	c.Conn.SetReadLimit(maxMessageSize)
+	c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.Conn.SetPongHandler(func(string) error {
+		c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+
 	for {
 		_, _, err := c.Conn.ReadMessage()
 		if err != nil {
@@ -126,15 +142,33 @@ func (c *Client) ReadPump() {
 }
 
 func (c *Client) WritePump() {
-	defer c.Conn.Close()
+	ticker := time.NewTicker(pingPeriod)
+	defer func() {
+		ticker.Stop()
+		c.Conn.Close()
+	}()
 
-	for message := range c.Send {
-		c.mu.Lock()
-		err := c.Conn.WriteMessage(websocket.TextMessage, message)
-		c.mu.Unlock()
-		if err != nil {
-			log.Printf("WS write error: %v", err)
-			return
+	for {
+		select {
+		case message, ok := <-c.Send:
+			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if !ok {
+				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			c.mu.Lock()
+			err := c.Conn.WriteMessage(websocket.TextMessage, message)
+			c.mu.Unlock()
+			if err != nil {
+				log.Printf("WS write error: %v", err)
+				return
+			}
+		case <-ticker.C:
+			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Printf("WS ping error: %v", err)
+				return
+			}
 		}
 	}
 }

@@ -76,6 +76,7 @@ func setupUserRoutes(r fiber.Router, db *gorm.DB) {
 
 	users.Post("", middleware.AdminRequired(), func(c *fiber.Ctx) error {
 		auth := middleware.GetAuthCtx(c)
+		_ = auth
 		var req struct {
 			Username string             `json:"username"`
 			Email    string             `json:"email"`

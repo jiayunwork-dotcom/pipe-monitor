@@ -131,7 +131,7 @@ func (e *SLAEngine) EvaluateRun(pipelineID, runID uint) {
 				}
 			}
 
-		case models.SLAMaxConsecutiveFail:
+		case models.SLAMaxConsecFail:
 			failN := e.CountConsecutiveFailures(pipelineID, run.ID)
 			threshold = float64(rule.MaxConsecutiveFail)
 			actualVal = float64(failN)

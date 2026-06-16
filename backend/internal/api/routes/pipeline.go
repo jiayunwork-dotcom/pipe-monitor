@@ -97,6 +97,7 @@ func setupPipelineRoutes(r fiber.Router, pipeSvc *services.PipelineService, runS
 
 	pipes.Put("/:id", adminOnly, func(c *fiber.Ctx) error {
 		auth := middleware.GetAuthCtx(c)
+		_ = auth
 		id := parseUintID(c, "id")
 		var updates map[string]interface{}
 		if err := c.BodyParser(&updates); err != nil {

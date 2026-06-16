@@ -36,10 +36,13 @@ func SetupRouter(
 		Format: "[${time}] ${status} - ${latency} ${method} ${path}\n",
 	}))
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "*",
+		AllowOriginsFunc: func(origin string) bool {
+			return true
+		},
 		AllowMethods:     "GET,POST,PUT,DELETE,PATCH,OPTIONS",
-		AllowHeaders:     "Origin,Content-Type,Accept,Authorization",
+		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,X-Webhook-Token",
 		AllowCredentials: true,
+		MaxAge:           3600,
 	}))
 
 	wsPublisher := func(tenantID uint, msgType string, payload interface{}) {

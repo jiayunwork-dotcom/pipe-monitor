@@ -111,7 +111,7 @@ async function reload() {
   } finally { loading.value = false }
 }
 
-onPageChange(p) { pagination.current = p.current; pagination.pageSize = p.pageSize; reload() }
+function onPageChange(p) { pagination.current = p.current; pagination.pageSize = p.pageSize; reload() }
 
 async function loadUsers() {
   const r = await userApi.list()

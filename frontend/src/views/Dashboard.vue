@@ -122,5 +122,8 @@ onMounted(() => {
   ws.on('pipeline_status_change', onStatusChange)
   ws.on('run_status_change', onRunChange)
   ws.on('new_alert', onAlert)
+  ws.on('connected', () => {
+    loadData()
+  })
 })
 </script>

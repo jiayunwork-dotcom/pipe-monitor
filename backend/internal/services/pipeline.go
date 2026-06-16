@@ -212,11 +212,11 @@ type DAGResult struct {
 
 func (s *PipelineService) BuildDAG(tenantID uint, isSuper bool, startPipelineID uint, includeUpstream, includeDownstream bool, maxDepth int) (*DAGResult, error) {
 	var allPipes []models.Pipeline
-	q := s.db.Model(&models.Pipeline{})
+	db := s.db.Session(&gorm.Session{NewDB: true})
 	if !isSuper {
-		q = q.Where("tenant_id = ?", tenantID)
+		db = db.Where("tenant_id = ?", tenantID)
 	}
-	if err := q.Find(&allPipes).Error; err != nil {
+	if err := db.Model(&models.Pipeline{}).Find(&allPipes).Error; err != nil {
 		return nil, err
 	}
 
@@ -226,11 +226,11 @@ func (s *PipelineService) BuildDAG(tenantID uint, isSuper bool, startPipelineID 
 	}
 
 	var allDeps []models.PipelineDependency
-	depQuery := s.db
+	depDB := s.db.Session(&gorm.Session{NewDB: true})
 	if !isSuper {
-		depQuery = depQuery.Where("tenant_id = ?", tenantID)
+		depDB = depDB.Where("tenant_id = ?", tenantID)
 	}
-	if err := depQuery.Find(&allDeps).Error; err != nil {
+	if err := depDB.Model(&models.PipelineDependency{}).Find(&allDeps).Error; err != nil {
 		return nil, err
 	}
 
@@ -431,21 +431,37 @@ func (s *PipelineService) CriticalPath(tenantID uint, isSuper bool) (*CriticalPa
 		return nil, err
 	}
 
-	durations := make(map[uint]int)
-	for id, _ := range dag.Nodes {
-		var p models.Pipeline
-		if err := s.db.Select("expected_run_sec").First(&p, id).Error; err == nil {
-			durations[id] = p.ExpectedRunSec
-			if durations[id] == 0 {
-				durations[id] = 300
-			}
+	if len(dag.Nodes) == 0 {
+		return &CriticalPathResult{Path: []uint{}, PathDetails: []string{}, TotalDuration: 0}, nil
+	}
+
+	nodeIDs := make([]uint, 0, len(dag.Nodes))
+	for id := range dag.Nodes {
+		nodeIDs = append(nodeIDs, id)
+	}
+
+	var pipes []models.Pipeline
+	db := s.db.Session(&gorm.Session{NewDB: true})
+	if err := db.Select("id, expected_run_sec").Where("id IN ?", nodeIDs).Find(&pipes).Error; err != nil {
+		return nil, err
+	}
+
+	durations := make(map[uint]int, len(nodeIDs))
+	for _, p := range pipes {
+		if p.ExpectedRunSec > 0 {
+			durations[p.ID] = p.ExpectedRunSec
 		} else {
+			durations[p.ID] = 300
+		}
+	}
+	for id := range dag.Nodes {
+		if _, ok := durations[id]; !ok {
 			durations[id] = 300
 		}
 	}
 
-	dp := make(map[uint]int)
-	prev := make(map[uint]uint)
+	dp := make(map[uint]int, len(dag.Nodes))
+	prev := make(map[uint]uint, len(dag.Nodes))
 	var endNode uint
 	maxEnd := 0
 
@@ -474,12 +490,23 @@ func (s *PipelineService) CriticalPath(tenantID uint, isSuper bool) (*CriticalPa
 	path := make([]uint, 0)
 	details := make([]string, 0)
 	cur := endNode
-	for cur != 0 {
-		path = append([]uint{cur}, path...)
+	maxIter := len(dag.Nodes) + 1
+	for cur != 0 && maxIter > 0 {
+		path = append(path, cur)
 		if n, ok := dag.Nodes[cur]; ok {
-			details = append([]string{n.Code}, details...)
+			details = append(details, n.Code)
 		}
-		cur = prev[cur]
+		next, ok := prev[cur]
+		if !ok {
+			break
+		}
+		cur = next
+		maxIter--
+	}
+
+	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+		path[i], path[j] = path[j], path[i]
+		details[i], details[j] = details[j], details[i]
 	}
 
 	return &CriticalPathResult{
