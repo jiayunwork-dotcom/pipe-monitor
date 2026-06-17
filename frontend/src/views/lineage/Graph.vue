@@ -100,9 +100,9 @@
             block
             style="margin-top:12px;"
             :disabled="!selectedSnapshotIds || selectedSnapshotIds.length !== 2"
-            @click="compareSnapshots"
+            @click.prevent="compareSnapshots"
           >
-            对比选中的2个快照
+            对比选中的2个快照 (已选{{ selectedSnapshotIds?.length || 0 }}/2)
           </a-button>
         </a-card>
 
@@ -176,7 +176,7 @@
       </a-form>
     </a-modal>
 
-    <a-modal v-model:open="snapshotDiffVisible" title="快照差异对比" width="800px" :footer="null">
+    <a-modal v-model:open="snapshotDiffVisible" title="快照差异对比" width="800px" :mask-closable="false" :keyboard="false">
       <a-alert type="info" show-icon style="margin-bottom:16px;">
         <template #message>
           新增 <strong>{{ snapshotDiff.added?.length || 0 }}</strong> 条边，删除 <strong>{{ snapshotDiff.removed?.length || 0 }}</strong> 条边
@@ -315,15 +315,18 @@ async function reloadGraph() {
     })
 
     const pipelineIds = graphData.value.nodes.filter(n => n.type === 'pipeline' && n.pipelineId).map(n => n.pipelineId)
+    console.log('[健康度] 需要加载的管道:', pipelineIds)
     const healthPromises = pipelineIds.map(async (pid) => {
       try {
         const hs = await lineageApi.getHealthScore(pid)
         healthScores.value[String(pid)] = hs.data
+        console.log(`[健康度] 管道${pid}加载成功:`, hs.data)
       } catch (e) {
-        // ignore
+        console.error(`[健康度] 管道${pid}加载失败:`, e)
       }
     })
     await Promise.all(healthPromises)
+    console.log('[健康度] 全部加载完成:', healthScores.value)
 
     await nextTick()
     renderGraph()
@@ -564,6 +567,7 @@ function getNodeTooltip(node) {
   const slaLabel = getSLALabel(node.slaStatus)
   const runTime = node.lastRunTime ? dayjs(node.lastRunTime).format('YYYY-MM-DD HH:mm:ss') : '从未运行'
   const health = node.pipelineId ? healthScores.value[String(node.pipelineId)] : null
+  console.log('[Tooltip] 节点:', node.name, 'pipelineId:', node.pipelineId, '健康度:', health)
 
   let healthHtml = ''
   if (health) {
@@ -706,6 +710,7 @@ async function deleteSnapshot(id) {
 }
 
 async function compareSnapshots() {
+  console.log('[快照对比] 点击按钮，选中的ID:', selectedSnapshotIds.value)
   const ids = selectedSnapshotIds.value
   if (!ids || ids.length !== 2) {
     message.warning('请选择2个快照进行对比')
@@ -717,16 +722,21 @@ async function compareSnapshots() {
     message.warning('快照ID无效，请重新选择')
     return
   }
+  console.log(`[快照对比] 对比快照 ${id1} 和 ${id2}`)
   try {
     const r = await lineageApi.compareSnapshots({
       snapshotId1: id1,
       snapshotId2: id2
     })
+    console.log('[快照对比] 返回结果:', r)
     snapshotDiff.value = r.data || { added: [], removed: [] }
     snapshotDiffVisible.value = true
+    console.log('[快照对比] 设置弹窗可见:', snapshotDiffVisible.value)
+    message.success(`对比完成，新增${snapshotDiff.value.added?.length || 0}条，删除${snapshotDiff.value.removed?.length || 0}条`)
   } catch (e) {
-    console.error('快照对比失败:', e)
-    message.error(e?.response?.data?.error || e.message || '对比失败')
+    console.error('[快照对比] 失败:', e)
+    const errMsg = e?.response?.data?.error || e.message || '对比失败'
+    message.error(errMsg)
   }
 }
 

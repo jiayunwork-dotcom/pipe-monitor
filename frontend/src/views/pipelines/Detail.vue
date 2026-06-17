@@ -313,7 +313,7 @@
     </a-form>
   </a-modal>
 
-  <a-modal v-model:open="batchImportModalVisible" title="批量导入血缘关系" width="900px" :mask-closable="false" :footer="batchImportFooter">
+  <a-modal v-model:open="batchImportModalVisible" title="批量导入血缘关系" width="900px" :mask-closable="false" :keyboard="false" :footer="batchImportFooter" :destroy-on-close="true" @update:open="handleBatchModalOpenChange">
     <a-alert type="info" show-icon style="margin-bottom:16px;">
       <template #message>
         CSV格式: 每行 <code>上游管道编码,下游管道编码,依赖类型,描述</code>，依赖类型可选值: hard/soft，描述可选
@@ -459,6 +459,19 @@ function openBatchImportModal() {
   batchImportModalVisible.value = true
 }
 
+function handleBatchModalOpenChange(open) {
+  console.log('[批量导入] 弹窗状态变化:', open, '导入中:', batchImporting.value, '有结果:', !!batchImportResult.value)
+  if (!open && batchImporting.value) {
+    batchImportModalVisible.value = true
+    return
+  }
+  if (!open && batchImportResult.value) {
+    batchImportModalVisible.value = true
+    return
+  }
+  batchImportModalVisible.value = open
+}
+
 function handleBatchFileUpload(file) {
   const reader = new FileReader()
   reader.onload = (e) => {
@@ -501,6 +514,7 @@ const batchImportFooter = computed(() => {
     return () => h('div', { style: 'display:flex;justify-content:flex-end;gap:8px;' }, [
       h('button', {
         class: 'ant-btn',
+        type: 'button',
         onClick: () => { batchImportModalVisible.value = false }
       }, '关闭')
     ])
@@ -508,10 +522,12 @@ const batchImportFooter = computed(() => {
   return () => h('div', { style: 'display:flex;justify-content:flex-end;gap:8px;' }, [
     h('button', {
       class: 'ant-btn',
+      type: 'button',
       onClick: () => { batchImportModalVisible.value = false }
     }, '取消'),
     h('button', {
       class: 'ant-btn ant-btn-primary',
+      type: 'button',
       disabled: batchImporting.value || !batchCSVContent.value.trim(),
       onClick: doBatchImport
     }, batchImporting.value ? '导入中...' : '导入')
