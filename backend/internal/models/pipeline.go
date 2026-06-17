@@ -124,3 +124,14 @@ type PipelineDependency struct {
 	TimeOffsetSec int       `gorm:"default:0" json:"timeOffsetSec"`
 	CreatedAt     time.Time `json:"createdAt"`
 }
+
+type LineageSnapshot struct {
+	ID          uint           `gorm:"primaryKey" json:"id"`
+	TenantID    uint           `gorm:"not null;index:idx_snapshot_tenant" json:"tenantId"`
+	Name        string         `gorm:"size:200;not null" json:"name"`
+	Description string         `gorm:"size:500" json:"description"`
+	SnapshotData utils.JSONString `gorm:"type:json" json:"snapshotData"`
+	CreatedBy   uint           `gorm:"not null" json:"createdBy"`
+	User        User           `gorm:"foreignKey:CreatedBy" json:"user,omitempty"`
+	CreatedAt   time.Time      `json:"createdAt"`
+}

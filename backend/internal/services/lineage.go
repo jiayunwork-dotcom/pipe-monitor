@@ -841,3 +841,568 @@ func (s *LineageService) calculateCumulativeImpact(targetID, startID uint, durat
 
 	return maxPath
 }
+
+type BatchImportItem struct {
+	UpstreamCode   string `json:"upstreamCode"`
+	DownstreamCode string `json:"downstreamCode"`
+	DependencyType string `json:"dependencyType"`
+	Description    string `json:"description"`
+}
+
+type BatchImportResultItem struct {
+	RowIndex       int    `json:"rowIndex"`
+	UpstreamCode   string `json:"upstreamCode"`
+	DownstreamCode string `json:"downstreamCode"`
+	Success        bool   `json:"success"`
+	Reason         string `json:"reason,omitempty"`
+	EdgeID         *uint  `json:"edgeId,omitempty"`
+}
+
+type edgeCandidate struct {
+	RowIndex             int
+	UpstreamPipelineID   uint
+	DownstreamPipelineID uint
+	DependencyType       models.LineageDependencyType
+	Description          string
+	UpstreamCode         string
+	DownstreamCode       string
+}
+
+type BatchImportResult struct {
+	TotalCount   int                    `json:"totalCount"`
+	SuccessCount int                    `json:"successCount"`
+	FailCount    int                    `json:"failCount"`
+	HasCycle     bool                   `json:"hasCycle"`
+	CyclePath    string                 `json:"cyclePath,omitempty"`
+	Items        []BatchImportResultItem `json:"items"`
+}
+
+func (s *LineageService) BatchImport(tenantID, userID uint, ipAddress string, items []BatchImportItem) (*BatchImportResult, error) {
+	result := &BatchImportResult{
+		TotalCount: len(items),
+		Items:      make([]BatchImportResultItem, 0, len(items)),
+	}
+
+	pipeCodeToID := make(map[string]uint)
+	var allPipes []models.Pipeline
+	if err := s.db.Select("id, code").Where("tenant_id = ?", tenantID).Find(&allPipes).Error; err != nil {
+		return nil, err
+	}
+	for _, p := range allPipes {
+		pipeCodeToID[p.Code] = p.ID
+	}
+
+	var validEdges []edgeCandidate
+
+	for i, item := range items {
+		rowResult := BatchImportResultItem{
+			RowIndex:       i + 1,
+			UpstreamCode:   item.UpstreamCode,
+			DownstreamCode: item.DownstreamCode,
+		}
+
+		if item.UpstreamCode == "" || item.DownstreamCode == "" {
+			rowResult.Success = false
+			rowResult.Reason = "上游或下游管道编码不能为空"
+			result.Items = append(result.Items, rowResult)
+			continue
+		}
+
+		upstreamID, upOK := pipeCodeToID[item.UpstreamCode]
+		downstreamID, downOK := pipeCodeToID[item.DownstreamCode]
+
+		if !upOK {
+			rowResult.Success = false
+			rowResult.Reason = fmt.Sprintf("上游管道编码 %s 不存在", item.UpstreamCode)
+			result.Items = append(result.Items, rowResult)
+			continue
+		}
+		if !downOK {
+			rowResult.Success = false
+			rowResult.Reason = fmt.Sprintf("下游管道编码 %s 不存在", item.DownstreamCode)
+			result.Items = append(result.Items, rowResult)
+			continue
+		}
+
+		if upstreamID == downstreamID {
+			rowResult.Success = false
+			rowResult.Reason = "上游和下游不能是同一管道"
+			result.Items = append(result.Items, rowResult)
+			continue
+		}
+
+		depType := models.LineageDepHard
+		if item.DependencyType == "soft" || item.DependencyType == "弱依赖" {
+			depType = models.LineageDepSoft
+		}
+
+		validEdges = append(validEdges, edgeCandidate{
+			RowIndex:         i + 1,
+			UpstreamPipelineID: upstreamID,
+			DownstreamPipelineID: downstreamID,
+			DependencyType:   depType,
+			Description:      item.Description,
+			UpstreamCode:     item.UpstreamCode,
+			DownstreamCode:   item.DownstreamCode,
+		})
+	}
+
+	if len(validEdges) == 0 {
+		return result, nil
+	}
+
+	if cyclePath, hasCycle := s.detectBatchCycle(tenantID, validEdges); hasCycle {
+		result.HasCycle = true
+		result.CyclePath = cyclePath
+		for _, e := range validEdges {
+			result.Items = append(result.Items, BatchImportResultItem{
+				RowIndex:       e.RowIndex,
+				UpstreamCode:   e.UpstreamCode,
+				DownstreamCode: e.DownstreamCode,
+				Success:        false,
+				Reason:         "检测到循环依赖，批量导入已全部拒绝",
+			})
+		}
+		return result, nil
+	}
+
+	for _, e := range validEdges {
+		addReq := &AddLineageEdgeReq{
+			TenantID:             tenantID,
+			PipelineID:           e.DownstreamPipelineID,
+			UserID:               userID,
+			IPAddress:            ipAddress,
+			UpstreamType:         models.LineageNodePipeline,
+			UpstreamPipelineID:   &e.UpstreamPipelineID,
+			DownstreamType:       models.LineageNodePipeline,
+			DownstreamPipelineID: &e.DownstreamPipelineID,
+			DependencyType:       e.DependencyType,
+			Description:          e.Description,
+		}
+
+		edge, err := s.AddEdge(addReq)
+		rowResult := BatchImportResultItem{
+			RowIndex:       e.RowIndex,
+			UpstreamCode:   e.UpstreamCode,
+			DownstreamCode: e.DownstreamCode,
+		}
+		if err != nil {
+			rowResult.Success = false
+			rowResult.Reason = err.Error()
+		} else {
+			rowResult.Success = true
+			rowResult.EdgeID = &edge.ID
+			result.SuccessCount++
+		}
+		result.Items = append(result.Items, rowResult)
+	}
+
+	result.FailCount = len(result.Items) - result.SuccessCount
+	return result, nil
+}
+
+func (s *LineageService) detectBatchCycle(tenantID uint, edges []edgeCandidate) (string, bool) {
+	graph := make(map[uint][]uint)
+	nodeSet := make(map[uint]bool)
+
+	var existingEdges []models.LineageEdge
+	s.db.Where("tenant_id = ? AND upstream_type = ? AND downstream_type = ?",
+		tenantID, models.LineageNodePipeline, models.LineageNodePipeline).
+		Find(&existingEdges)
+
+	for _, e := range existingEdges {
+		if e.UpstreamPipelineID != nil && e.DownstreamPipelineID != nil {
+			graph[*e.DownstreamPipelineID] = append(graph[*e.DownstreamPipelineID], *e.UpstreamPipelineID)
+			nodeSet[*e.UpstreamPipelineID] = true
+			nodeSet[*e.DownstreamPipelineID] = true
+		}
+	}
+
+	for _, e := range edges {
+		graph[e.DownstreamPipelineID] = append(graph[e.DownstreamPipelineID], e.UpstreamPipelineID)
+		nodeSet[e.UpstreamPipelineID] = true
+		nodeSet[e.DownstreamPipelineID] = true
+	}
+
+	visited := make(map[uint]bool)
+	recStack := make(map[uint]bool)
+	path := make([]uint, 0)
+
+	for node := range nodeSet {
+		if !visited[node] {
+			if cycle := s.dfsFindCycleInGraph(graph, node, visited, recStack, path); cycle != "" {
+				return cycle, true
+			}
+		}
+	}
+	return "", false
+}
+
+func (s *LineageService) dfsFindCycleInGraph(graph map[uint][]uint, start uint, visited, recStack map[uint]bool, path []uint) string {
+	visited[start] = true
+	recStack[start] = true
+	path = append(path, start)
+
+	for _, next := range graph[start] {
+		if !visited[next] {
+			if cycle := s.dfsFindCycleInGraph(graph, next, visited, recStack, path); cycle != "" {
+				return cycle
+			}
+		} else if recStack[next] {
+			cyclePath := make([]uint, 0)
+			found := false
+			for _, p := range path {
+				if p == next {
+					found = true
+				}
+				if found {
+					cyclePath = append(cyclePath, p)
+				}
+			}
+			cyclePath = append(cyclePath, next)
+			return s.formatCyclePath(cyclePath)
+		}
+	}
+
+	recStack[start] = false
+	path = path[:len(path)-1]
+	return ""
+}
+
+type SnapshotEdgeData struct {
+	ID                 uint   `json:"id"`
+	UpstreamType       string `json:"upstreamType"`
+	UpstreamPipelineID *uint  `json:"upstreamPipelineId,omitempty"`
+	UpstreamExternal   string `json:"upstreamExternal,omitempty"`
+	UpstreamName       string `json:"upstreamName,omitempty"`
+	UpstreamCode       string `json:"upstreamCode,omitempty"`
+	DownstreamType     string `json:"downstreamType"`
+	DownstreamPipelineID *uint `json:"downstreamPipelineId,omitempty"`
+	DownstreamExternal string `json:"downstreamExternal,omitempty"`
+	DownstreamName     string `json:"downstreamName,omitempty"`
+	DownstreamCode     string `json:"downstreamCode,omitempty"`
+	DependencyType     string `json:"dependencyType"`
+	Description        string `json:"description"`
+}
+
+type CreateSnapshotReq struct {
+	TenantID    uint
+	UserID      uint
+	Name        string
+	Description string
+}
+
+func (s *LineageService) CreateSnapshot(req *CreateSnapshotReq) (*models.LineageSnapshot, error) {
+	var edges []models.LineageEdge
+	if err := s.db.Preload("UpstreamPipeline").Preload("DownstreamPipeline").
+		Where("tenant_id = ?", req.TenantID).
+		Find(&edges).Error; err != nil {
+		return nil, err
+	}
+
+	edgeData := make([]SnapshotEdgeData, 0, len(edges))
+	seen := make(map[string]bool)
+	for _, e := range edges {
+		key := fmt.Sprintf("%s_%v_%s_%s_%v_%s",
+			e.UpstreamType, e.UpstreamPipelineID, e.UpstreamExternal,
+			e.DownstreamType, e.DownstreamPipelineID, e.DownstreamExternal)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		upName, upCode := "", ""
+		if e.UpstreamPipeline != nil {
+			upName = e.UpstreamPipeline.Name
+			upCode = e.UpstreamPipeline.Code
+		}
+		downName, downCode := "", ""
+		if e.DownstreamPipeline != nil {
+			downName = e.DownstreamPipeline.Name
+			downCode = e.DownstreamPipeline.Code
+		}
+
+		edgeData = append(edgeData, SnapshotEdgeData{
+			ID:                   e.ID,
+			UpstreamType:         string(e.UpstreamType),
+			UpstreamPipelineID:   e.UpstreamPipelineID,
+			UpstreamExternal:     e.UpstreamExternal,
+			UpstreamName:         upName,
+			UpstreamCode:         upCode,
+			DownstreamType:       string(e.DownstreamType),
+			DownstreamPipelineID: e.DownstreamPipelineID,
+			DownstreamExternal:   e.DownstreamExternal,
+			DownstreamName:       downName,
+			DownstreamCode:       downCode,
+			DependencyType:       string(e.DependencyType),
+			Description:          e.Description,
+		})
+	}
+
+	snapshot := &models.LineageSnapshot{
+		TenantID:     req.TenantID,
+		Name:         req.Name,
+		Description:  req.Description,
+		SnapshotData: utils.JSONString(utils.ToJSON(edgeData)),
+		CreatedBy:    req.UserID,
+	}
+
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(snapshot).Error; err != nil {
+			return err
+		}
+
+		var total int64
+		tx.Model(&models.LineageSnapshot{}).Where("tenant_id = ?", req.TenantID).Count(&total)
+		if total > 10 {
+			var oldSnapshots []models.LineageSnapshot
+			tx.Where("tenant_id = ?", req.TenantID).
+				Order("created_at ASC").
+				Limit(int(total - 10)).
+				Find(&oldSnapshots)
+			for _, ss := range oldSnapshots {
+				tx.Delete(&ss)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return snapshot, nil
+}
+
+func (s *LineageService) ListSnapshots(tenantID uint) ([]models.LineageSnapshot, error) {
+	var snapshots []models.LineageSnapshot
+	if err := s.db.Preload("User").
+		Where("tenant_id = ?", tenantID).
+		Order("created_at DESC").
+		Find(&snapshots).Error; err != nil {
+		return nil, err
+	}
+	return snapshots, nil
+}
+
+func (s *LineageService) DeleteSnapshot(tenantID, snapshotID, userID uint) error {
+	result := s.db.Where("id = ? AND tenant_id = ?", snapshotID, tenantID).
+		Delete(&models.LineageSnapshot{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("快照不存在")
+	}
+	return nil
+}
+
+type SnapshotDiffItem struct {
+	ChangeType     string `json:"changeType"`
+	UpstreamName   string `json:"upstreamName"`
+	UpstreamCode   string `json:"upstreamCode"`
+	DownstreamName string `json:"downstreamName"`
+	DownstreamCode string `json:"downstreamCode"`
+	DependencyType string `json:"dependencyType"`
+	Description    string `json:"description"`
+}
+
+type SnapshotDiffResult struct {
+	Added   []SnapshotDiffItem `json:"added"`
+	Removed []SnapshotDiffItem `json:"removed"`
+}
+
+func (s *LineageService) CompareSnapshots(tenantID uint, snapshotID1, snapshotID2 uint) (*SnapshotDiffResult, error) {
+	var ss1, ss2 models.LineageSnapshot
+	if err := s.db.Where("id = ? AND tenant_id = ?", snapshotID1, tenantID).First(&ss1).Error; err != nil {
+		return nil, errors.New("快照1不存在")
+	}
+	if err := s.db.Where("id = ? AND tenant_id = ?", snapshotID2, tenantID).First(&ss2).Error; err != nil {
+		return nil, errors.New("快照2不存在")
+	}
+
+	var edges1, edges2 []SnapshotEdgeData
+	utils.FromJSON(string(ss1.SnapshotData), &edges1)
+	utils.FromJSON(string(ss2.SnapshotData), &edges2)
+
+	makeKey := func(e SnapshotEdgeData) string {
+		return fmt.Sprintf("%s_%v_%s_%s_%v_%s",
+			e.UpstreamType, e.UpstreamPipelineID, e.UpstreamExternal,
+			e.DownstreamType, e.DownstreamPipelineID, e.DownstreamExternal)
+	}
+
+	map1 := make(map[string]SnapshotEdgeData)
+	for _, e := range edges1 {
+		map1[makeKey(e)] = e
+	}
+
+	map2 := make(map[string]SnapshotEdgeData)
+	for _, e := range edges2 {
+		map2[makeKey(e)] = e
+	}
+
+	result := &SnapshotDiffResult{
+		Added:   make([]SnapshotDiffItem, 0),
+		Removed: make([]SnapshotDiffItem, 0),
+	}
+
+	for k, e := range map2 {
+		if _, exists := map1[k]; !exists {
+			result.Added = append(result.Added, SnapshotDiffItem{
+				ChangeType:     "added",
+				UpstreamName:   e.UpstreamName,
+				UpstreamCode:   e.UpstreamCode,
+				DownstreamName: e.DownstreamName,
+				DownstreamCode: e.DownstreamCode,
+				DependencyType: e.DependencyType,
+				Description:    e.Description,
+			})
+		}
+	}
+
+	for k, e := range map1 {
+		if _, exists := map2[k]; !exists {
+			result.Removed = append(result.Removed, SnapshotDiffItem{
+				ChangeType:     "removed",
+				UpstreamName:   e.UpstreamName,
+				UpstreamCode:   e.UpstreamCode,
+				DownstreamName: e.DownstreamName,
+				DownstreamCode: e.DownstreamCode,
+				DependencyType: e.DependencyType,
+				Description:    e.Description,
+			})
+		}
+	}
+
+	return result, nil
+}
+
+type HealthScoreResult struct {
+	Score    int      `json:"score"`
+	Details  []string `json:"details"`
+	Level    string   `json:"level"`
+}
+
+func (s *LineageService) CalculateHealthScore(pipelineID uint) (*HealthScoreResult, error) {
+	score := 100
+	var details []string
+
+	var upstreamEdges []models.LineageEdge
+	s.db.Preload("UpstreamPipeline").
+		Where("pipeline_id = ? AND edge_direction = ? AND downstream_type = ? AND downstream_pipeline_id = ?",
+			pipelineID, "upstream", models.LineageNodePipeline, pipelineID).
+		Find(&upstreamEdges)
+
+	var downstreamEdges []models.LineageEdge
+	s.db.Preload("DownstreamPipeline").
+		Where("pipeline_id = ? AND edge_direction = ? AND upstream_type = ? AND upstream_pipeline_id = ?",
+			pipelineID, "downstream", models.LineageNodePipeline, pipelineID).
+		Find(&downstreamEdges)
+
+	if len(upstreamEdges) == 0 {
+		score -= 20
+		details = append(details, "无上游依赖声明: -20分")
+	}
+
+	if len(downstreamEdges) == 0 {
+		score -= 10
+		details = append(details, "无下游产出声明: -10分")
+	}
+
+	maxDepth := s.calculateUpstreamDepth(pipelineID, 0, make(map[uint]bool))
+	if maxDepth > 3 {
+		score -= 10
+		details = append(details, fmt.Sprintf("存在超过3层的间接依赖链(当前%d层): -10分", maxDepth))
+	}
+
+	sevenDaysAgo := time.Now().AddDate(0, 0, -7)
+	for _, edge := range upstreamEdges {
+		if edge.UpstreamType == models.LineageNodePipeline && edge.UpstreamPipelineID != nil {
+			var failCount int64
+			s.db.Model(&models.PipelineRun{}).
+				Where("pipeline_id = ? AND status IN ? AND created_at >= ?",
+					*edge.UpstreamPipelineID,
+					[]string{string(models.RunFailed), string(models.RunTimeout), string(models.RunCancelled)},
+					sevenDaysAgo).
+				Count(&failCount)
+			if failCount > 0 {
+				score -= 15
+				details = append(details, fmt.Sprintf("上游管道[%s]最近7天内运行失败: -15分", edge.UpstreamPipeline.Name))
+			}
+		}
+	}
+
+	for _, edge := range upstreamEdges {
+		if edge.DependencyType == models.LineageDepSoft &&
+			edge.UpstreamType == models.LineageNodePipeline &&
+			edge.UpstreamPipelineID != nil {
+			var recentRuns []models.PipelineRun
+			s.db.Where("pipeline_id = ?", *edge.UpstreamPipelineID).
+				Order("created_at DESC").
+				Limit(3).
+				Find(&recentRuns)
+			if len(recentRuns) == 3 {
+				allFailed := true
+				for _, r := range recentRuns {
+					if r.Status == models.RunSuccess {
+						allFailed = false
+						break
+					}
+				}
+				if allFailed {
+					score -= 25
+					details = append(details, fmt.Sprintf("弱依赖上游管道[%s]连续3次运行失败: -25分", edge.UpstreamPipeline.Name))
+				}
+			}
+		}
+	}
+
+	if len(details) == 0 && maxDepth <= 2 {
+		score = 100
+		details = append(details, "上游全部运行正常且依赖层级不超过2层: 满分")
+	}
+
+	if score < 0 {
+		score = 0
+	}
+
+	level := "excellent"
+	if score < 60 {
+		level = "poor"
+	} else if score < 80 {
+		level = "fair"
+	} else if score < 90 {
+		level = "good"
+	}
+
+	return &HealthScoreResult{
+		Score:   score,
+		Details: details,
+		Level:   level,
+	}, nil
+}
+
+func (s *LineageService) calculateUpstreamDepth(pipelineID uint, currentDepth int, visited map[uint]bool) int {
+	if visited[pipelineID] {
+		return currentDepth
+	}
+	visited[pipelineID] = true
+
+	var edges []models.LineageEdge
+	s.db.Where("pipeline_id = ? AND edge_direction = ? AND downstream_type = ? AND downstream_pipeline_id = ?",
+		pipelineID, "upstream", models.LineageNodePipeline, pipelineID).Find(&edges)
+
+	if len(edges) == 0 {
+		return currentDepth
+	}
+
+	maxChildDepth := currentDepth
+	for _, edge := range edges {
+		if edge.UpstreamType == models.LineageNodePipeline && edge.UpstreamPipelineID != nil {
+			childDepth := s.calculateUpstreamDepth(*edge.UpstreamPipelineID, currentDepth+1, visited)
+			if childDepth > maxChildDepth {
+				maxChildDepth = childDepth
+			}
+		}
+	}
+	return maxChildDepth
+}

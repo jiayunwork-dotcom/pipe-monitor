@@ -73,5 +73,11 @@ export const lineageApi = {
   getAuditLogs: (id, params) => http.get(`/v1/lineage/pipelines/${id}/audit`, { params }),
   getGraph: params => http.get('/v1/lineage/graph', { params }),
   impactAnalysis: data => http.post('/v1/lineage/impact-analysis', data),
-  checkCycle: (id, data) => http.post(`/v1/lineage/pipelines/${id}/check-cycle`, data)
+  checkCycle: (id, data) => http.post(`/v1/lineage/pipelines/${id}/check-cycle`, data),
+  batchImport: data => http.post('/v1/lineage/batch-import', data),
+  createSnapshot: data => http.post('/v1/lineage/snapshots', data),
+  listSnapshots: () => http.get('/v1/lineage/snapshots'),
+  deleteSnapshot: id => http.delete(`/v1/lineage/snapshots/${id}`),
+  compareSnapshots: params => http.get('/v1/lineage/snapshots/compare', { params }),
+  getHealthScore: id => http.get(`/v1/lineage/pipelines/${id}/health-score`)
 }

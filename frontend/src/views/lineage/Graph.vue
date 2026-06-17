@@ -52,6 +52,10 @@
               <span class="legend-dot" style="border:3px solid #fa8c16;"></span>
               <span>受影响节点</span>
             </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span class="legend-dot" style="background:#e6f7ff;border:2px dashed #1890ff;"></span>
+              <span>团队分组(聚合)</span>
+            </div>
           </div>
         </a-card>
 
@@ -65,6 +69,41 @@
               清除选择
             </a-button>
           </a-space>
+        </a-card>
+
+        <a-card size="small" title="快照管理" style="margin-top:12px;">
+          <template #extra v-if="auth.isAdmin">
+            <a-button type="primary" size="small" @click="openCreateSnapshot">
+              <camera-outlined />打快照
+            </a-button>
+          </template>
+          <div v-if="snapshots.length === 0" style="color:#999;text-align:center;padding:20px 0;">
+            暂无快照
+          </div>
+          <a-checkbox-group v-model:value="selectedSnapshotIds" v-else>
+            <div v-for="s in snapshots" :key="s.id" style="padding:6px 0;border-bottom:1px solid #f0f0f0;">
+              <a-checkbox :value="s.id">
+                <span>{{ s.name }}</span>
+              </a-checkbox>
+              <div style="font-size:12px;color:#999;margin-left:24px;">
+                {{ formatDateTime(s.createdAt) }} | {{ s.user?.fullName || s.user?.username || '-' }}
+                <a-popconfirm v-if="auth.isAdmin" title="确认删除?" @confirm="()=>deleteSnapshot(s.id)" style="margin-left:8px;">
+                  <a-button type="link" size="small" danger>删除</a-button>
+                </a-popconfirm>
+              </div>
+            </div>
+          </a-checkbox-group>
+          <a-button
+            v-if="snapshots.length > 0"
+            type="primary"
+            size="small"
+            block
+            style="margin-top:12px;"
+            :disabled="selectedSnapshotIds.length !== 2"
+            @click="compareSnapshots"
+          >
+            对比选中的2个快照
+          </a-button>
         </a-card>
 
         <a-card size="small" title="统计信息" style="margin-top:12px;">
@@ -125,18 +164,79 @@
         </a-table>
       </div>
     </a-drawer>
+
+    <a-modal v-model:open="createSnapshotVisible" title="创建血缘快照" @ok="doCreateSnapshot" :confirm-loading="creatingSnapshot" ok-text="创建">
+      <a-form layout="vertical">
+        <a-form-item label="快照名称" required>
+          <a-input v-model:value="snapshotForm.name" placeholder="例如：2024Q1版本血缘快照" />
+        </a-form-item>
+        <a-form-item label="描述">
+          <a-textarea v-model:value="snapshotForm.description" :rows="3" placeholder="描述快照的用途或版本信息" />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <a-modal v-model:open="snapshotDiffVisible" title="快照差异对比" width="800px" :footer="null">
+      <a-alert type="info" show-icon style="margin-bottom:16px;">
+        <template #message>
+          新增 <strong>{{ snapshotDiff.added?.length || 0 }}</strong> 条边，删除 <strong>{{ snapshotDiff.removed?.length || 0 }}</strong> 条边
+        </template>
+      </a-alert>
+      <a-table
+        :data-source="allDiffItems"
+        :pagination="{ pageSize: 10 }"
+        row-key="diffKey"
+        size="small"
+      >
+        <template #columns>
+          <a-table-column title="变更类型" data-index="changeType" width="100">
+            <template #default="{ record }">
+              <a-tag :color="record.changeType === 'added' ? 'green' : 'red'">
+                {{ record.changeType === 'added' ? '新增' : '删除' }}
+              </a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="上游" width="200">
+            <template #default="{ record }">
+              {{ record.upstreamName || '-' }}
+              <a-tag v-if="record.upstreamCode" color="default" style="margin-left:4px;">{{ record.upstreamCode }}</a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="下游" width="200">
+            <template #default="{ record }">
+              {{ record.downstreamName || '-' }}
+              <a-tag v-if="record.downstreamCode" color="default" style="margin-left:4px;">{{ record.downstreamCode }}</a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="依赖类型" data-index="dependencyType" width="100">
+            <template #default="{ record }">
+              <a-tag :color="record.dependencyType === 'hard' ? 'red' : 'orange'">
+                {{ record.dependencyType === 'hard' ? '强依赖' : '弱依赖' }}
+              </a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="描述" data-index="description">
+            <template #default="{ record }">
+              {{ record.description || '-' }}
+            </template>
+          </a-table-column>
+        </template>
+      </a-table>
+    </a-modal>
   </a-card>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ReloadOutlined, BulbOutlined, WarningOutlined } from '@ant-design/icons-vue'
+import { ReloadOutlined, BulbOutlined, WarningOutlined, CameraOutlined } from '@ant-design/icons-vue'
 import { Network } from 'vis-network/standalone/esm/vis-network'
 import { message } from 'ant-design-vue'
 import { pipelineApi, lineageApi } from '@/api'
 import dayjs from 'dayjs'
+import { useAuthStore } from '@/stores/auth'
 
+const auth = useAuthStore()
 const route = useRoute()
 const loading = ref(false)
 const graphContainer = ref(null)
@@ -148,7 +248,17 @@ const selectedNode = ref(null)
 const impactDrawerVisible = ref(false)
 const impactResult = ref(null)
 const highlightedNodes = ref(new Set())
+const collapsedTeams = ref(new Set())
+const healthScores = ref({})
 let network = null
+
+const snapshots = ref([])
+const selectedSnapshotIds = ref([])
+const createSnapshotVisible = ref(false)
+const creatingSnapshot = ref(false)
+const snapshotForm = ref({ name: '', description: '' })
+const snapshotDiffVisible = ref(false)
+const snapshotDiff = ref({ added: [], removed: [] })
 
 const upstreamCount = computed(() => {
   return graphData.value.nodes?.filter(n => n.direction === 'upstream').length || 0
@@ -158,9 +268,24 @@ const downstreamCount = computed(() => {
   return graphData.value.nodes?.filter(n => n.direction === 'downstream').length || 0
 })
 
+const allDiffItems = computed(() => {
+  const added = (snapshotDiff.value.added || []).map((item, idx) => ({ ...item, diffKey: `a_${idx}` }))
+  const removed = (snapshotDiff.value.removed || []).map((item, idx) => ({ ...item, diffKey: `r_${idx}` }))
+  return [...added, ...removed]
+})
+
 async function loadAllPipes() {
   const r = await pipelineApi.list({ pageSize: 500 })
   allPipes.value = r.data || []
+}
+
+async function loadSnapshots() {
+  try {
+    const r = await lineageApi.listSnapshots()
+    snapshots.value = r.data || []
+  } catch (e) {
+    // ignore
+  }
 }
 
 async function reloadGraph() {
@@ -174,6 +299,30 @@ async function reloadGraph() {
     graphData.value = r.data || { nodes: [], edges: [] }
     selectedNode.value = null
     highlightedNodes.value = new Set()
+
+    const pipelineIds = graphData.value.nodes.filter(n => n.type === 'pipeline' && n.pipelineId).map(n => n.pipelineId)
+    for (const pid of pipelineIds) {
+      try {
+        const hs = await lineageApi.getHealthScore(pid)
+        healthScores.value[pid] = hs.data
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    collapsedTeams.value = new Set()
+    const teamCounts = {}
+    graphData.value.nodes.forEach(n => {
+      if (n.team && n.type === 'pipeline') {
+        teamCounts[n.team] = (teamCounts[n.team] || 0) + 1
+      }
+    })
+    Object.entries(teamCounts).forEach(([team, count]) => {
+      if (count > 3) {
+        collapsedTeams.value.add(team)
+      }
+    })
+
     await nextTick()
     renderGraph()
   } finally {
@@ -194,12 +343,48 @@ function getNodeColor(status) {
 function renderGraph() {
   if (!graphContainer.value) return
 
+  const nodesMap = new Map()
+  graphData.value.nodes.forEach(n => nodesMap.set(n.id, n))
+
+  const teamGroups = {}
+  graphData.value.nodes.forEach(n => {
+    if (n.team && n.type === 'pipeline') {
+      if (!teamGroups[n.team]) teamGroups[n.team] = []
+      teamGroups[n.team].push(n)
+    }
+  })
+
   const nodesArr = []
   const edgesArr = []
-  const nodesMap = new Map()
+  const collapsedNodeMap = new Map()
 
   graphData.value.nodes.forEach(n => {
-    nodesMap.set(n.id, n)
+    const isCollapsed = n.team && collapsedTeams.value.has(n.team) && teamGroups[n.team]?.length > 3
+    if (isCollapsed && n.team) {
+      if (!collapsedNodeMap.has(n.team)) {
+        const teamNodes = teamGroups[n.team]
+        collapsedNodeMap.set(n.team, true)
+        nodesArr.push({
+          id: `team_${n.team}`,
+          label: `${n.team}\n(${teamNodes.length}个节点)`,
+          shape: 'box',
+          color: {
+            background: '#e6f7ff',
+            border: '#1890ff'
+          },
+          borderWidth: 2,
+          borderWidthSelected: 4,
+          font: { size: 14, align: 'center', color: '#0050b3' },
+          size: 30,
+          title: getTeamTooltip(n.team, teamNodes),
+          team: n.team,
+          isTeamGroup: true,
+          direction: teamNodes[0]?.direction || 'center'
+        })
+      }
+      return
+    }
+
     const isHighlighted = highlightedNodes.value.has(n.id)
     const isCenter = n.direction === 'center'
 
@@ -244,12 +429,29 @@ function renderGraph() {
   graphData.value.edges.forEach(e => {
     const sourceNode = nodesMap.get(e.source)
     const targetNode = nodesMap.get(e.target)
+    if (!sourceNode || !targetNode) return
+
+    let sourceId = e.source
+    let targetId = e.target
+
+    if (sourceNode.team && collapsedTeams.value.has(sourceNode.team) && teamGroups[sourceNode.team]?.length > 3) {
+      sourceId = `team_${sourceNode.team}`
+    }
+    if (targetNode.team && collapsedTeams.value.has(targetNode.team) && teamGroups[targetNode.team]?.length > 3) {
+      targetId = `team_${targetNode.team}`
+    }
+
+    if (sourceId === targetId) return
+
     const isHighlighted = highlightedNodes.value.has(e.source) && highlightedNodes.value.has(e.target)
+
+    const existingEdge = edgesArr.find(ed => ed.from === sourceId && ed.to === targetId)
+    if (existingEdge) return
 
     edgesArr.push({
       id: e.id,
-      from: e.source,
-      to: e.target,
+      from: sourceId,
+      to: targetId,
       arrows: 'to',
       color: {
         color: isHighlighted ? '#fa8c16' : '#aaa',
@@ -318,7 +520,11 @@ function renderGraph() {
   network.on('click', (params) => {
     if (params.nodes.length > 0) {
       const nodeId = params.nodes[0]
-      selectedNode.value = nodesMap.get(nodeId) || null
+      if (nodeId.startsWith('team_')) {
+        selectedNode.value = { id: nodeId, name: nodeId.replace('team_', ''), type: 'team' }
+      } else {
+        selectedNode.value = nodesMap.get(nodeId) || null
+      }
     } else {
       selectedNode.value = null
     }
@@ -327,6 +533,16 @@ function renderGraph() {
   network.on('doubleClick', (params) => {
     if (params.nodes.length > 0) {
       const nodeId = params.nodes[0]
+      if (nodeId.startsWith('team_')) {
+        const team = nodeId.replace('team_', '')
+        if (collapsedTeams.value.has(team)) {
+          collapsedTeams.value.delete(team)
+        } else {
+          collapsedTeams.value.add(team)
+        }
+        renderGraph()
+        return
+      }
       const node = nodesMap.get(nodeId)
       if (node && node.type === 'pipeline' && node.pipelineId) {
         window.location = `#/pipelines/${node.pipelineId}`
@@ -345,14 +561,37 @@ function getNodeTooltip(node) {
 
   const slaLabel = getSLALabel(node.slaStatus)
   const runTime = node.lastRunTime ? dayjs(node.lastRunTime).format('YYYY-MM-DD HH:mm:ss') : '从未运行'
+  const health = node.pipelineId ? healthScores.value[node.pipelineId] : null
 
-  return `<div style="padding:8px;min-width:200px;">
+  let healthHtml = ''
+  if (health) {
+    const healthColors = { excellent: '#52c41a', good: '#1890ff', fair: '#faad14', poor: '#ff4d4f' }
+    const healthLabels = { excellent: '优秀', good: '良好', fair: '一般', poor: '较差' }
+    healthHtml = `<div style="border-top:1px solid #eee;margin-top:8px;padding-top:8px;">
+      <strong style="color:${healthColors[health.level] || '#333'};">健康度: ${health.score}/100 (${healthLabels[health.level] || health.level})</strong>
+      ${health.details?.length ? '<br/><span style="color:#888;font-size:12px;">' + health.details.join('<br/>') + '</span>' : ''}
+    </div>`
+  }
+
+  return `<div style="padding:8px;min-width:220px;max-width:320px;">
     <strong>${node.name}</strong><br/>
     <span style="color:#888;">编码: ${node.code || '-'}</span><br/>
     <span style="color:#888;">团队: ${node.team || '-'}</span><br/>
     <span style="color:#888;">最近运行: ${runTime}</span><br/>
     <span style="color:#888;">SLA状态: ${slaLabel}</span>
     ${node.hasAlert ? '<br/><span style="color:#faad14;">⚠ 存在未处理告警</span>' : ''}
+    ${healthHtml}
+  </div>`
+}
+
+function getTeamTooltip(team, nodes) {
+  return `<div style="padding:8px;min-width:200px;">
+    <strong style="font-size:14px;">${team}</strong><br/>
+    <span style="color:#888;">共 ${nodes.length} 个管道节点</span><br/>
+    <div style="margin-top:8px;font-size:12px;color:#666;">
+      ${nodes.map(n => n.name).join('<br/>')}
+    </div>
+    <div style="margin-top:8px;color:#1890ff;font-size:12px;">双击可${collapsedTeams.value.has(team) ? '展开' : '折叠'}</div>
   </div>`
 }
 
@@ -391,6 +630,10 @@ function formatDuration(seconds) {
   return `${secs}秒`
 }
 
+function formatDateTime(t) {
+  return t ? dayjs(t).format('YYYY-MM-DD HH:mm') : '-'
+}
+
 async function doImpactAnalysis() {
   if (!selectedNode.value || selectedNode.value.type !== 'pipeline') {
     message.warning('请先选择一个管道节点')
@@ -423,6 +666,60 @@ function clearSelection() {
   renderGraph()
 }
 
+function openCreateSnapshot() {
+  snapshotForm.value = {
+    name: dayjs().format('YYYY-MM-DD HH:mm') + ' 血缘快照',
+    description: ''
+  }
+  createSnapshotVisible.value = true
+}
+
+async function doCreateSnapshot() {
+  if (!snapshotForm.value.name.trim()) {
+    message.warning('请填写快照名称')
+    return
+  }
+  creatingSnapshot.value = true
+  try {
+    await lineageApi.createSnapshot(snapshotForm.value)
+    message.success('快照创建成功')
+    createSnapshotVisible.value = false
+    loadSnapshots()
+  } catch (e) {
+    message.error(e.message || '创建失败')
+  } finally {
+    creatingSnapshot.value = false
+  }
+}
+
+async function deleteSnapshot(id) {
+  try {
+    await lineageApi.deleteSnapshot(id)
+    message.success('已删除')
+    selectedSnapshotIds.value = selectedSnapshotIds.value.filter(sid => sid !== id)
+    loadSnapshots()
+  } catch (e) {
+    message.error(e.message || '删除失败')
+  }
+}
+
+async function compareSnapshots() {
+  if (selectedSnapshotIds.value.length !== 2) {
+    message.warning('请选择2个快照进行对比')
+    return
+  }
+  try {
+    const r = await lineageApi.compareSnapshots({
+      snapshotId1: selectedSnapshotIds.value[0],
+      snapshotId2: selectedSnapshotIds.value[1]
+    })
+    snapshotDiff.value = r.data || { added: [], removed: [] }
+    snapshotDiffVisible.value = true
+  } catch (e) {
+    message.error(e.message || '对比失败')
+  }
+}
+
 watch(selectedPipelineId, () => {
   if (selectedPipelineId.value) {
     reloadGraph()
@@ -431,6 +728,7 @@ watch(selectedPipelineId, () => {
 
 onMounted(async () => {
   await loadAllPipes()
+  await loadSnapshots()
   if (!selectedPipelineId.value && allPipes.value.length > 0) {
     selectedPipelineId.value = allPipes.value[0].id
   }

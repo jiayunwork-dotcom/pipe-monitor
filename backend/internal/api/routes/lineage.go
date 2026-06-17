@@ -195,4 +195,138 @@ func setupLineageRoutes(r fiber.Router, lineageSvc *services.LineageService) {
 		}
 		return c.JSON(fiber.Map{"hasCycle": false})
 	})
+
+	lineage.Post("/batch-import", adminOnly, func(c *fiber.Ctx) error {
+		auth := middleware.GetAuthCtx(c)
+
+		var req struct {
+			CSVContent string `json:"csvContent"`
+			Items      []services.BatchImportItem `json:"items"`
+		}
+
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "参数错误: " + err.Error()})
+		}
+
+		var items []services.BatchImportItem
+		if len(req.Items) > 0 {
+			items = req.Items
+		} else if req.CSVContent != "" {
+			lines := strings.Split(strings.TrimSpace(req.CSVContent), "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				parts := strings.Split(line, ",")
+				if len(parts) < 2 {
+					continue
+				}
+				item := services.BatchImportItem{
+					UpstreamCode:   strings.TrimSpace(parts[0]),
+					DownstreamCode: strings.TrimSpace(parts[1]),
+				}
+				if len(parts) >= 3 {
+					item.DependencyType = strings.TrimSpace(parts[2])
+				}
+				if len(parts) >= 4 {
+					item.Description = strings.TrimSpace(parts[3])
+				}
+				items = append(items, item)
+			}
+		}
+
+		if len(items) == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "请提供有效的CSV内容或数据项"})
+		}
+
+		ip := c.IP()
+		xfwd := c.Get("X-Forwarded-For")
+		if xfwd != "" {
+			ips := strings.Split(xfwd, ",")
+			if len(ips) > 0 {
+				ip = strings.TrimSpace(ips[0])
+			}
+		}
+
+		result, err := lineageSvc.BatchImport(auth.TenantID, auth.UserID, ip, items)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{"data": result})
+	})
+
+	lineage.Post("/snapshots", adminOnly, func(c *fiber.Ctx) error {
+		auth := middleware.GetAuthCtx(c)
+
+		var req struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "参数错误: " + err.Error()})
+		}
+
+		if strings.TrimSpace(req.Name) == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "快照名称不能为空"})
+		}
+
+		snapshot, err := lineageSvc.CreateSnapshot(&services.CreateSnapshotReq{
+			TenantID:    auth.TenantID,
+			UserID:      auth.UserID,
+			Name:        strings.TrimSpace(req.Name),
+			Description: strings.TrimSpace(req.Description),
+		})
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		return c.JSON(fiber.Map{"data": snapshot})
+	})
+
+	lineage.Get("/snapshots", func(c *fiber.Ctx) error {
+		auth := middleware.GetAuthCtx(c)
+		snapshots, err := lineageSvc.ListSnapshots(auth.TenantID)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(fiber.Map{"data": snapshots})
+	})
+
+	lineage.Delete("/snapshots/:id", adminOnly, func(c *fiber.Ctx) error {
+		auth := middleware.GetAuthCtx(c)
+		snapshotID := parseUintID(c, "id")
+
+		if err := lineageSvc.DeleteSnapshot(auth.TenantID, snapshotID, auth.UserID); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(fiber.Map{"success": true})
+	})
+
+	lineage.Get("/snapshots/compare", func(c *fiber.Ctx) error {
+		auth := middleware.GetAuthCtx(c)
+		snapshotID1 := parseUintParam(c, "snapshotId1")
+		snapshotID2 := parseUintParam(c, "snapshotId2")
+
+		if snapshotID1 == 0 || snapshotID2 == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "请选择两个快照进行对比"})
+		}
+
+		result, err := lineageSvc.CompareSnapshots(auth.TenantID, snapshotID1, snapshotID2)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(fiber.Map{"data": result})
+	})
+
+	lineage.Get("/pipelines/:id/health-score", func(c *fiber.Ctx) error {
+		pipelineID := parseUintID(c, "id")
+		result, err := lineageSvc.CalculateHealthScore(pipelineID)
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(fiber.Map{"data": result})
+	})
 }

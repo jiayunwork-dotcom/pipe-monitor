@@ -38,7 +38,22 @@
 
       <div style="margin-top:16px;" v-if="activeTab==='basic'">
         <a-row :gutter="16">
-          <a-col :span="12">
+          <a-col :span="6">
+            <a-card size="small" title="血缘健康度">
+              <a-statistic
+                :value="healthScore?.score || 0"
+                :value-style="healthScoreStyle"
+                suffix="/100"
+              />
+              <a-tag :color="healthLevelColor" style="margin-top:8px;">{{ healthLevelLabel }}</a-tag>
+              <div v-if="healthScore?.details?.length" style="margin-top:12px;">
+                <a-typography-paragraph type="secondary" style="font-size:12px;margin:0;">
+                  <div v-for="(d, idx) in healthScore.details" :key="idx" style="margin-bottom:4px;">{{ d }}</div>
+                </a-typography-paragraph>
+              </div>
+            </a-card>
+          </a-col>
+          <a-col :span="18">
             <a-card title="基础信息" size="small">
               <a-descriptions :column="1" bordered size="small">
                 <a-descriptions-item label="数据源">{{ pipeline?.sourceDetail || '-' }}</a-descriptions-item>
@@ -56,7 +71,9 @@
               </a-descriptions>
             </a-card>
           </a-col>
-          <a-col :span="12">
+        </a-row>
+        <a-row :gutter="16" style="margin-top:16px;">
+          <a-col :span="24">
             <a-card title="SLA统计" size="small">
               <a-row :gutter="12">
                 <a-col :span="8"><a-statistic title="总运行" :value="slaStats?.totalRuns || 0" /></a-col>
@@ -111,6 +128,11 @@
       </div>
 
       <div v-if="activeTab==='lineage'">
+        <div style="margin-bottom:12px;">
+          <a-button v-if="auth.isAdmin" type="primary" @click="openBatchImportModal">
+            <upload-outlined />批量导入血缘
+          </a-button>
+        </div>
         <a-row :gutter="16">
           <a-col :span="12">
             <a-card title="上游依赖" size="small">
@@ -290,6 +312,70 @@
       </a-form-item>
     </a-form>
   </a-modal>
+
+  <a-modal v-model:open="batchImportModalVisible" title="批量导入血缘关系" width="900px" @ok="doBatchImport" :confirm-loading="batchImporting" ok-text="导入" cancel-text="取消">
+    <a-alert type="info" show-icon style="margin-bottom:16px;">
+      <template #message>
+        CSV格式: 每行 <code>上游管道编码,下游管道编码,依赖类型,描述</code>，依赖类型可选值: hard/soft，描述可选
+      </template>
+    </a-alert>
+    <a-upload
+      :show-upload-list="false"
+      :before-upload="handleBatchFileUpload"
+      accept=".csv"
+    >
+      <a-button><upload-outlined />上传CSV文件</a-button>
+    </a-upload>
+    <div style="margin-top:12px;">
+      <a-textarea
+        v-model:value="batchCSVContent"
+        :rows="8"
+        placeholder="粘贴CSV内容，每行格式：上游管道编码,下游管道编码,依赖类型,描述&#10;示例：&#10;ods_order_extract,dwd_order_clean,hard,订单ODS到DWD清洗&#10;dwd_order_clean,ads_daily_gmv,soft,订单DWD到GMV报表"
+      />
+    </div>
+
+    <div v-if="batchImportResult" style="margin-top:16px;">
+      <a-alert
+        :type="batchImportResult.hasCycle ? 'error' : (batchImportResult.failCount > 0 ? 'warning' : 'success')"
+        show-icon
+      >
+        <template #message>
+          <template v-if="batchImportResult.hasCycle">
+            <strong>检测到循环依赖，批量导入已全部拒绝！</strong><br/>
+            环路路径: {{ batchImportResult.cyclePath }}
+          </template>
+          <template v-else>
+            导入完成: 成功 <strong>{{ batchImportResult.successCount }}</strong> 条，失败 <strong>{{ batchImportResult.failCount }}</strong> 条
+          </template>
+        </template>
+      </a-alert>
+      <a-table
+        :data-source="batchImportResult.items"
+        size="small"
+        :pagination="{ pageSize: 10 }"
+        row-key="rowIndex"
+        style="margin-top:12px;"
+      >
+        <template #columns>
+          <a-table-column title="行号" data-index="rowIndex" width="60" />
+          <a-table-column title="上游编码" data-index="upstreamCode" width="180" />
+          <a-table-column title="下游编码" data-index="downstreamCode" width="180" />
+          <a-table-column title="状态" data-index="success" width="80">
+            <template #default="{ record }">
+              <a-tag :color="record.success ? 'green' : 'red'">
+                {{ record.success ? '成功' : '失败' }}
+              </a-tag>
+            </template>
+          </a-table-column>
+          <a-table-column title="失败原因" data-index="reason">
+            <template #default="{ record }">
+              {{ record.reason || '-' }}
+            </template>
+          </a-table-column>
+        </template>
+      </a-table>
+    </div>
+  </a-modal>
 </template>
 
 <script setup>
@@ -297,7 +383,7 @@ import { ref, reactive, onMounted, computed, h } from 'vue'
 import { useRoute } from 'vue-router'
 import { message } from 'ant-design-vue'
 import dayjs from 'dayjs'
-import { LeftOutlined } from '@ant-design/icons-vue'
+import { LeftOutlined, UploadOutlined } from '@ant-design/icons-vue'
 import { pipelineApi, slaApi, lineageApi } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 
@@ -317,6 +403,26 @@ const slaForm = reactive({
   finishDeadlineTime:'08:00', maxDurationSec:3600, maxConsecutiveFail:3,
   alertSeverity:'warning', alertChannels:'["feishu","email"]', description:'',
   _channels:['feishu','email'], _deadline:dayjs('08:00','HH:mm').toDate()
+})
+
+const healthScore = ref(null)
+const healthScoreStyle = computed(() => {
+  const score = healthScore.value?.score || 0
+  let color = '#52c41a'
+  if (score < 60) color = '#ff4d4f'
+  else if (score < 80) color = '#faad14'
+  else if (score < 90) color = '#1890ff'
+  return { color, fontWeight: 'bold' }
+})
+const healthLevelColor = computed(() => {
+  const level = healthScore.value?.level
+  const colors = { excellent: 'green', good: 'blue', fair: 'orange', poor: 'red' }
+  return colors[level] || 'default'
+})
+const healthLevelLabel = computed(() => {
+  const level = healthScore.value?.level
+  const labels = { excellent: '优秀', good: '良好', fair: '一般', poor: '较差' }
+  return labels[level] || '未知'
 })
 
 const activeTab = ref('basic')
@@ -341,6 +447,50 @@ const allPipes = ref([])
 const availablePipes = computed(() => {
   return allPipes.value.filter(p => p.id !== id.value)
 })
+
+const batchImportModalVisible = ref(false)
+const batchImporting = ref(false)
+const batchCSVContent = ref('')
+const batchImportResult = ref(null)
+
+function openBatchImportModal() {
+  batchCSVContent.value = ''
+  batchImportResult.value = null
+  batchImportModalVisible.value = true
+}
+
+function handleBatchFileUpload(file) {
+  const reader = new FileReader()
+  reader.onload = (e) => {
+    batchCSVContent.value = e.target.result
+  }
+  reader.readAsText(file)
+  return false
+}
+
+async function doBatchImport() {
+  if (!batchCSVContent.value.trim()) {
+    message.warning('请粘贴或上传CSV内容')
+    return
+  }
+  batchImporting.value = true
+  try {
+    const r = await lineageApi.batchImport({ csvContent: batchCSVContent.value })
+    batchImportResult.value = r.data
+    if (r.data.hasCycle) {
+      message.error('检测到循环依赖，批量导入已全部拒绝')
+    } else if (r.data.failCount > 0) {
+      message.warning(`导入完成，成功${r.data.successCount}条，失败${r.data.failCount}条`)
+    } else {
+      message.success(`成功导入${r.data.successCount}条血缘关系`)
+    }
+    loadAll()
+  } catch (e) {
+    message.error(e.message || '批量导入失败')
+  } finally {
+    batchImporting.value = false
+  }
+}
 
 const auditLogs = ref({ data: [], total: 0 })
 const auditPage = ref(1)
@@ -436,13 +586,14 @@ const ganttGroups = computed(() => {
 })
 
 async function loadAll() {
-  const [detail, slaR, slaS, hist, lineage, pipes] = await Promise.all([
+  const [detail, slaR, slaS, hist, lineage, pipes, health] = await Promise.all([
     pipelineApi.get(id.value),
     slaApi.rules({ pipelineId: id.value }),
     slaApi.stats({ pipelineId: id.value, days: 30 }),
     pipelineApi.runHistory(id.value, { days: 30 }),
     lineageApi.getLineage(id.value),
-    pipelineApi.list({ pageSize: 500 })
+    pipelineApi.list({ pageSize: 500 }),
+    lineageApi.getHealthScore(id.value)
   ])
   pipeline.value = detail.pipeline
   dependencies.value = detail.dependencies || []
@@ -452,6 +603,7 @@ async function loadAll() {
   history.value = hist.data || []
   lineageData.value = lineage.data || { upstreams: [], downstreams: [] }
   allPipes.value = pipes.data || []
+  healthScore.value = health.data
   loadAuditLogs(1)
 }
 
