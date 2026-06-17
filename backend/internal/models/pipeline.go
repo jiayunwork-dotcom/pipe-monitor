@@ -99,18 +99,18 @@ type LineageEdge struct {
 }
 
 type LineageAuditLog struct {
-	ID           uint      `gorm:"primaryKey" json:"id"`
-	TenantID     uint      `gorm:"not null;index:idx_lineage_audit_tenant" json:"tenantId"`
-	PipelineID   uint      `gorm:"not null;index:idx_lineage_audit_pipe" json:"pipelineId"`
-	Pipeline     Pipeline  `gorm:"foreignKey:PipelineID" json:"-"`
-	UserID       uint      `gorm:"not null" json:"userId"`
-	User         User      `gorm:"foreignKey:UserID" json:"user,omitempty"`
-	ActionType   string    `gorm:"size:20;not null;index:idx_lineage_audit_action" json:"actionType"`
-	EdgeID       *uint     `json:"edgeId"`
-	EdgeInfo     string    `gorm:"type:json" json:"edgeInfo"`
-	ChangeDetail string    `gorm:"type:json" json:"changeDetail"`
-	IPAddress    string    `gorm:"size:50" json:"ipAddress"`
-	CreatedAt    time.Time `gorm:"index:idx_lineage_audit_time" json:"createdAt"`
+	ID           uint              `gorm:"primaryKey" json:"id"`
+	TenantID     uint              `gorm:"not null;index:idx_lineage_audit_tenant" json:"tenantId"`
+	PipelineID   uint              `gorm:"not null;index:idx_lineage_audit_pipe" json:"pipelineId"`
+	Pipeline     Pipeline          `gorm:"foreignKey:PipelineID" json:"-"`
+	UserID       uint              `gorm:"not null" json:"userId"`
+	User         User              `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	ActionType   string            `gorm:"size:20;not null;index:idx_lineage_audit_action" json:"actionType"`
+	EdgeID       *uint             `json:"edgeId"`
+	EdgeInfo     utils.JSONString  `gorm:"type:json" json:"edgeInfo"`
+	ChangeDetail utils.JSONString  `gorm:"type:json" json:"changeDetail"`
+	IPAddress    string            `gorm:"size:50" json:"ipAddress"`
+	CreatedAt    time.Time         `gorm:"index:idx_lineage_audit_time" json:"createdAt"`
 }
 
 type PipelineDependency struct {

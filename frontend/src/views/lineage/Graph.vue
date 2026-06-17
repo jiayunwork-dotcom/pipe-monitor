@@ -160,7 +160,7 @@ const downstreamCount = computed(() => {
 
 async function loadAllPipes() {
   const r = await pipelineApi.list({ pageSize: 500 })
-  allPipes.value = r.data?.data || []
+  allPipes.value = r.data || []
 }
 
 async function reloadGraph() {
@@ -431,6 +431,9 @@ watch(selectedPipelineId, () => {
 
 onMounted(async () => {
   await loadAllPipes()
+  if (!selectedPipelineId.value && allPipes.value.length > 0) {
+    selectedPipelineId.value = allPipes.value[0].id
+  }
   if (selectedPipelineId.value) {
     await reloadGraph()
   }

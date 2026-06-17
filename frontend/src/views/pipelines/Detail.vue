@@ -22,14 +22,21 @@
       </a-row>
     </a-card>
 
-    <a-card :tab-list="tabs" v-model:activeKey="activeTab">
-      <template #tabBarExtraContent>
-        <a-tag v-if="activeTab==='lineage'" color="blue">
-          上游 {{ lineageData.upstreams?.length || 0 }} | 下游 {{ lineageData.downstreams?.length || 0 }}
-        </a-tag>
-      </template>
+    <a-card>
+      <a-tabs v-model:activeKey="activeTab" size="large">
+        <a-tab-pane key="basic" tab="基本信息" />
+        <a-tab-pane key="lineage" tab="血缘配置">
+          <template #tab>
+            <span>血缘配置</span>
+            <a-tag v-if="activeTab==='lineage'" color="blue" style="margin-left:8px;">
+              {{ (lineageData.upstreams?.length || 0) + (lineageData.downstreams?.length || 0) }}
+            </a-tag>
+          </template>
+        </a-tab-pane>
+        <a-tab-pane key="history" tab="血缘历史" />
+      </a-tabs>
 
-      <div v-if="activeTab==='basic'">
+      <div style="margin-top:16px;" v-if="activeTab==='basic'">
         <a-row :gutter="16">
           <a-col :span="12">
             <a-card title="基础信息" size="small">
@@ -63,7 +70,10 @@
           </a-col>
         </a-row>
 
-        <a-card title="SLA规则列表" :extra="auth.isAdmin ? h(aButton, {type:'primary', onClick:openSLA}, ()=>'新增规则') : null" style="margin-top:16px;">
+        <a-card title="SLA规则列表" style="margin-top:16px;">
+          <template #extra v-if="auth.isAdmin">
+            <a-button type="primary" size="small" @click="openSLA">新增规则</a-button>
+          </template>
           <a-table :columns="slaCols" :data-source="slaRules" row-key="id" size="small" :pagination="false">
             <template #bodyCell="{column, record}">
               <template v-if="column.key==='type'"><a-tag>{{ slaTypeText[record.ruleType] }}</a-tag></template>
@@ -103,7 +113,10 @@
       <div v-if="activeTab==='lineage'">
         <a-row :gutter="16">
           <a-col :span="12">
-            <a-card title="上游依赖" :extra="auth.isAdmin ? h(aButton, {type:'primary', size:'small', onClick:()=>openEdgeModal('upstream')}, ()=>'+ 添加上游') : null" size="small">
+            <a-card title="上游依赖" size="small">
+              <template #extra v-if="auth.isAdmin">
+                <a-button type="primary" size="small" @click="openEdgeModal('upstream')">+ 添加上游</a-button>
+              </template>
               <a-table :data-source="lineageData.upstreams || []" row-key="id" size="small" :pagination="false">
                 <template #columns>
                   <a-table-column title="类型" width="100">
@@ -141,7 +154,10 @@
             </a-card>
           </a-col>
           <a-col :span="12">
-            <a-card title="下游产出" :extra="auth.isAdmin ? h(aButton, {type:'primary', size:'small', onClick:()=>openEdgeModal('downstream')}, ()=>'+ 添加下游') : null" size="small">
+            <a-card title="下游产出" size="small">
+              <template #extra v-if="auth.isAdmin">
+                <a-button type="primary" size="small" @click="openEdgeModal('downstream')">+ 添加下游</a-button>
+              </template>
               <a-table :data-source="lineageData.downstreams || []" row-key="id" size="small" :pagination="false">
                 <template #columns>
                   <a-table-column title="类型" width="100">
@@ -437,7 +453,7 @@ async function loadAll() {
   slaStats.value = slaS.data
   history.value = hist.data || []
   lineageData.value = lineage.data || { upstreams: [], downstreams: [] }
-  allPipes.value = pipes.data?.data || []
+  allPipes.value = pipes.data || []
   loadAuditLogs(1)
 }
 

@@ -42,9 +42,11 @@ func (s *LineageService) AddEdge(req *AddLineageEdgeReq) (*models.LineageEdge, e
 		return nil, fmt.Errorf("检测到循环依赖: %s", cyclePath)
 	}
 
-	var upstreamEdge *models.LineageEdge
+	var mainEdge *models.LineageEdge
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		upstreamEdge = &models.LineageEdge{
+		currentDir := s.getCurrentEdgeDirection(req)
+
+		mainEdge = &models.LineageEdge{
 			TenantID:             req.TenantID,
 			PipelineID:           req.PipelineID,
 			UpstreamType:         req.UpstreamType,
@@ -54,24 +56,24 @@ func (s *LineageService) AddEdge(req *AddLineageEdgeReq) (*models.LineageEdge, e
 			DownstreamPipelineID: req.DownstreamPipelineID,
 			DownstreamExternal:   req.DownstreamExternal,
 			DependencyType:       req.DependencyType,
-			EdgeDirection:        "upstream",
+			EdgeDirection:        currentDir,
 			Description:          req.Description,
 			CreatedBy:            req.UserID,
 		}
 
-		if err := tx.Create(upstreamEdge).Error; err != nil {
+		if err := tx.Create(mainEdge).Error; err != nil {
 			return err
 		}
 
-		downstreamPipelineID := req.PipelineID
-		if req.DownstreamType == models.LineageNodePipeline && req.DownstreamPipelineID != nil {
-			downstreamPipelineID = *req.DownstreamPipelineID
-		}
-
-		if downstreamPipelineID != req.PipelineID && req.DownstreamType == models.LineageNodePipeline {
-			downstreamEdge := &models.LineageEdge{
+		peerPipeID, hasPeer := s.getPeerPipelineID(req)
+		if hasPeer {
+			peerDir := "upstream"
+			if currentDir == "upstream" {
+				peerDir = "downstream"
+			}
+			peerEdge := &models.LineageEdge{
 				TenantID:             req.TenantID,
-				PipelineID:           downstreamPipelineID,
+				PipelineID:           peerPipeID,
 				UpstreamType:         req.UpstreamType,
 				UpstreamPipelineID:   req.UpstreamPipelineID,
 				UpstreamExternal:     req.UpstreamExternal,
@@ -79,25 +81,25 @@ func (s *LineageService) AddEdge(req *AddLineageEdgeReq) (*models.LineageEdge, e
 				DownstreamPipelineID: req.DownstreamPipelineID,
 				DownstreamExternal:   req.DownstreamExternal,
 				DependencyType:       req.DependencyType,
-				EdgeDirection:        "downstream",
+				EdgeDirection:        peerDir,
 				Description:          req.Description,
 				CreatedBy:            req.UserID,
 			}
-			if err := tx.Create(downstreamEdge).Error; err != nil {
+			if err := tx.Create(peerEdge).Error; err != nil {
 				return err
 			}
 		}
 
 		edgeInfo := map[string]interface{}{
-			"id":                   upstreamEdge.ID,
-			"upstreamType":         upstreamEdge.UpstreamType,
-			"upstreamPipelineId":   upstreamEdge.UpstreamPipelineID,
-			"upstreamExternal":     upstreamEdge.UpstreamExternal,
-			"downstreamType":       upstreamEdge.DownstreamType,
-			"downstreamPipelineId": upstreamEdge.DownstreamPipelineID,
-			"downstreamExternal":   upstreamEdge.DownstreamExternal,
-			"dependencyType":       upstreamEdge.DependencyType,
-			"description":          upstreamEdge.Description,
+			"id":                   mainEdge.ID,
+			"upstreamType":         mainEdge.UpstreamType,
+			"upstreamPipelineId":   mainEdge.UpstreamPipelineID,
+			"upstreamExternal":     mainEdge.UpstreamExternal,
+			"downstreamType":       mainEdge.DownstreamType,
+			"downstreamPipelineId": mainEdge.DownstreamPipelineID,
+			"downstreamExternal":   mainEdge.DownstreamExternal,
+			"dependencyType":       mainEdge.DependencyType,
+			"description":          mainEdge.Description,
 		}
 
 		auditLog := &models.LineageAuditLog{
@@ -105,8 +107,8 @@ func (s *LineageService) AddEdge(req *AddLineageEdgeReq) (*models.LineageEdge, e
 			PipelineID: req.PipelineID,
 			UserID:     req.UserID,
 			ActionType: "add",
-			EdgeID:     &upstreamEdge.ID,
-			EdgeInfo:   string(utils.JSONString(utils.ToJSON(edgeInfo))),
+			EdgeID:     &mainEdge.ID,
+			EdgeInfo:   utils.JSONString(utils.ToJSON(edgeInfo)),
 			IPAddress:  req.IPAddress,
 		}
 
@@ -117,7 +119,41 @@ func (s *LineageService) AddEdge(req *AddLineageEdgeReq) (*models.LineageEdge, e
 		return nil, err
 	}
 
-	return upstreamEdge, nil
+	return mainEdge, nil
+}
+
+func (s *LineageService) getCurrentEdgeDirection(req *AddLineageEdgeReq) string {
+	if req.DownstreamType == models.LineageNodePipeline &&
+		req.DownstreamPipelineID != nil &&
+		*req.DownstreamPipelineID == req.PipelineID {
+		return "upstream"
+	}
+	if req.UpstreamType == models.LineageNodePipeline &&
+		req.UpstreamPipelineID != nil &&
+		*req.UpstreamPipelineID == req.PipelineID {
+		return "downstream"
+	}
+	if req.UpstreamType == models.LineageNodeExternal {
+		return "upstream"
+	}
+	if req.DownstreamType == models.LineageNodeExternal {
+		return "downstream"
+	}
+	return "upstream"
+}
+
+func (s *LineageService) getPeerPipelineID(req *AddLineageEdgeReq) (uint, bool) {
+	if req.UpstreamType == models.LineageNodePipeline &&
+		req.UpstreamPipelineID != nil &&
+		*req.UpstreamPipelineID != req.PipelineID {
+		return *req.UpstreamPipelineID, true
+	}
+	if req.DownstreamType == models.LineageNodePipeline &&
+		req.DownstreamPipelineID != nil &&
+		*req.DownstreamPipelineID != req.PipelineID {
+		return *req.DownstreamPipelineID, true
+	}
+	return 0, false
 }
 
 func (s *LineageService) validateEdge(req *AddLineageEdgeReq) error {
@@ -289,7 +325,7 @@ func (s *LineageService) RemoveEdge(tenantID, edgeID, userID uint, ipAddress str
 			UserID:     userID,
 			ActionType: "remove",
 			EdgeID:     &edge.ID,
-			EdgeInfo:   string(utils.JSONString(utils.ToJSON(edgeInfo))),
+			EdgeInfo:   utils.JSONString(utils.ToJSON(edgeInfo)),
 			IPAddress:  ipAddress,
 		}
 
