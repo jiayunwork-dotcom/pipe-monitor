@@ -99,7 +99,7 @@
             size="small"
             block
             style="margin-top:12px;"
-            :disabled="selectedSnapshotIds.length !== 2"
+            :disabled="!selectedSnapshotIds || selectedSnapshotIds.length !== 2"
             @click="compareSnapshots"
           >
             对比选中的2个快照
@@ -314,9 +314,6 @@ async function reloadGraph() {
       }
     })
 
-    await nextTick()
-    renderGraph()
-
     const pipelineIds = graphData.value.nodes.filter(n => n.type === 'pipeline' && n.pipelineId).map(n => n.pipelineId)
     const healthPromises = pipelineIds.map(async (pid) => {
       try {
@@ -328,9 +325,8 @@ async function reloadGraph() {
     })
     await Promise.all(healthPromises)
 
-    if (network) {
-      renderGraph()
-    }
+    await nextTick()
+    renderGraph()
   } finally {
     loading.value = false
   }
@@ -710,19 +706,27 @@ async function deleteSnapshot(id) {
 }
 
 async function compareSnapshots() {
-  if (selectedSnapshotIds.value.length !== 2) {
+  const ids = selectedSnapshotIds.value
+  if (!ids || ids.length !== 2) {
     message.warning('请选择2个快照进行对比')
+    return
+  }
+  const id1 = Number(ids[0])
+  const id2 = Number(ids[1])
+  if (!id1 || !id2) {
+    message.warning('快照ID无效，请重新选择')
     return
   }
   try {
     const r = await lineageApi.compareSnapshots({
-      snapshotId1: Number(selectedSnapshotIds.value[0]),
-      snapshotId2: Number(selectedSnapshotIds.value[1])
+      snapshotId1: id1,
+      snapshotId2: id2
     })
     snapshotDiff.value = r.data || { added: [], removed: [] }
     snapshotDiffVisible.value = true
   } catch (e) {
-    message.error(e.message || '对比失败')
+    console.error('快照对比失败:', e)
+    message.error(e?.response?.data?.error || e.message || '对比失败')
   }
 }
 

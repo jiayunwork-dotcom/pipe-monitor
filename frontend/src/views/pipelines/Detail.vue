@@ -313,7 +313,7 @@
     </a-form>
   </a-modal>
 
-  <a-modal v-model:open="batchImportModalVisible" title="批量导入血缘关系" width="900px" @ok="doBatchImport" :confirm-loading="batchImporting" ok-text="导入" cancel-text="取消" :mask-closable="false">
+  <a-modal v-model:open="batchImportModalVisible" title="批量导入血缘关系" width="900px" :mask-closable="false" :footer="batchImportFooter">
     <a-alert type="info" show-icon style="margin-bottom:16px;">
       <template #message>
         CSV格式: 每行 <code>上游管道编码,下游管道编码,依赖类型,描述</code>，依赖类型可选值: hard/soft，描述可选
@@ -468,8 +468,7 @@ function handleBatchFileUpload(file) {
   return false
 }
 
-async function doBatchImport(e) {
-  if (e && e.preventDefault) e.preventDefault()
+async function doBatchImport() {
   if (!batchCSVContent.value.trim()) {
     message.warning('请粘贴或上传CSV内容')
     return
@@ -495,8 +494,29 @@ async function doBatchImport(e) {
   } finally {
     batchImporting.value = false
   }
-  return false
 }
+
+const batchImportFooter = computed(() => {
+  if (batchImportResult.value) {
+    return () => h('div', { style: 'display:flex;justify-content:flex-end;gap:8px;' }, [
+      h('button', {
+        class: 'ant-btn',
+        onClick: () => { batchImportModalVisible.value = false }
+      }, '关闭')
+    ])
+  }
+  return () => h('div', { style: 'display:flex;justify-content:flex-end;gap:8px;' }, [
+    h('button', {
+      class: 'ant-btn',
+      onClick: () => { batchImportModalVisible.value = false }
+    }, '取消'),
+    h('button', {
+      class: 'ant-btn ant-btn-primary',
+      disabled: batchImporting.value || !batchCSVContent.value.trim(),
+      onClick: doBatchImport
+    }, batchImporting.value ? '导入中...' : '导入')
+  ])
+})
 
 async function loadLineageData() {
   const lineage = await lineageApi.getLineage(id.value)
