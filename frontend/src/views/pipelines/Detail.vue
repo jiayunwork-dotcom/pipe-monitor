@@ -117,38 +117,30 @@
               <template #extra v-if="auth.isAdmin">
                 <a-button type="primary" size="small" @click="openEdgeModal('upstream')">+ 添加上游</a-button>
               </template>
-              <a-table :data-source="lineageData.upstreams || []" row-key="id" size="small" :pagination="false">
-                <template #columns>
-                  <a-table-column title="类型" width="100">
-                    <template #default="{ record }">
-                      <a-tag :color="record.upstreamType==='pipeline'?'blue':'purple'">
-                        {{ record.upstreamType==='pipeline'?'管道':'外部' }}
-                      </a-tag>
-                    </template>
-                  </a-table-column>
-                  <a-table-column title="上游名称">
-                    <template #default="{ record }">
-                      <span v-if="record.upstreamType==='pipeline'">
-                        {{ record.upstreamPipeline?.name || '-' }}
-                        <a-tag style="margin-left:4px;" color="default">{{ record.upstreamPipeline?.code || '-' }}</a-tag>
-                      </span>
-                      <span v-else>{{ record.upstreamExternal }}</span>
-                    </template>
-                  </a-table-column>
-                  <a-table-column title="依赖类型" width="100">
-                    <template #default="{ record }">
-                      <a-tag :color="record.dependencyType==='hard'?'red':'orange'">
-                        {{ record.dependencyType==='hard'?'强依赖':'弱依赖' }}
-                      </a-tag>
-                    </template>
-                  </a-table-column>
-                  <a-table-column title="操作" width="80" v-if="auth.isAdmin">
-                    <template #default="{ record }">
-                      <a-popconfirm title="确认删除该依赖?" @confirm="()=>removeEdge(record.id)">
-                        <a-button type="link" danger size="small">删除</a-button>
-                      </a-popconfirm>
-                    </template>
-                  </a-table-column>
+              <a-table :columns="upstreamCols" :data-source="lineageData.upstreams || []" row-key="id" size="small" :pagination="false">
+                <template #bodyCell="{ column, record }">
+                  <template v-if="column.key==='type'">
+                    <a-tag :color="record.upstreamType==='pipeline'?'blue':'purple'">
+                      {{ record.upstreamType==='pipeline'?'管道':'外部' }}
+                    </a-tag>
+                  </template>
+                  <template v-else-if="column.key==='name'">
+                    <span v-if="record.upstreamType==='pipeline'">
+                      {{ record.upstreamPipeline?.name || '-' }}
+                      <a-tag style="margin-left:4px;" color="default">{{ record.upstreamPipeline?.code || '-' }}</a-tag>
+                    </span>
+                    <span v-else>{{ record.upstreamExternal }}</span>
+                  </template>
+                  <template v-else-if="column.key==='dependencyType'">
+                    <a-tag :color="record.dependencyType==='hard'?'red':'orange'">
+                      {{ record.dependencyType==='hard'?'强依赖':'弱依赖' }}
+                    </a-tag>
+                  </template>
+                  <template v-else-if="column.key==='action' && auth.isAdmin">
+                    <a-popconfirm title="确认删除该依赖?" @confirm="()=>removeEdge(record.id)">
+                      <a-button type="link" danger size="small">删除</a-button>
+                    </a-popconfirm>
+                  </template>
                 </template>
               </a-table>
             </a-card>
@@ -158,38 +150,30 @@
               <template #extra v-if="auth.isAdmin">
                 <a-button type="primary" size="small" @click="openEdgeModal('downstream')">+ 添加下游</a-button>
               </template>
-              <a-table :data-source="lineageData.downstreams || []" row-key="id" size="small" :pagination="false">
-                <template #columns>
-                  <a-table-column title="类型" width="100">
-                    <template #default="{ record }">
-                      <a-tag :color="record.downstreamType==='pipeline'?'blue':'purple'">
-                        {{ record.downstreamType==='pipeline'?'管道':'外部' }}
-                      </a-tag>
-                    </template>
-                  </a-table-column>
-                  <a-table-column title="下游名称">
-                    <template #default="{ record }">
-                      <span v-if="record.downstreamType==='pipeline'">
-                        {{ record.downstreamPipeline?.name || '-' }}
-                        <a-tag style="margin-left:4px;" color="default">{{ record.downstreamPipeline?.code || '-' }}</a-tag>
-                      </span>
-                      <span v-else>{{ record.downstreamExternal }}</span>
-                    </template>
-                  </a-table-column>
-                  <a-table-column title="依赖类型" width="100">
-                    <template #default="{ record }">
-                      <a-tag :color="record.dependencyType==='hard'?'red':'orange'">
-                        {{ record.dependencyType==='hard'?'强依赖':'弱依赖' }}
-                      </a-tag>
-                    </template>
-                  </a-table-column>
-                  <a-table-column title="操作" width="80" v-if="auth.isAdmin">
-                    <template #default="{ record }">
-                      <a-popconfirm title="确认删除该依赖?" @confirm="()=>removeEdge(record.id)">
-                        <a-button type="link" danger size="small">删除</a-button>
-                      </a-popconfirm>
-                    </template>
-                  </a-table-column>
+              <a-table :columns="downstreamCols" :data-source="lineageData.downstreams || []" row-key="id" size="small" :pagination="false">
+                <template #bodyCell="{ column, record }">
+                  <template v-if="column.key==='type'">
+                    <a-tag :color="record.downstreamType==='pipeline'?'blue':'purple'">
+                      {{ record.downstreamType==='pipeline'?'管道':'外部' }}
+                    </a-tag>
+                  </template>
+                  <template v-else-if="column.key==='name'">
+                    <span v-if="record.downstreamType==='pipeline'">
+                      {{ record.downstreamPipeline?.name || '-' }}
+                      <a-tag style="margin-left:4px;" color="default">{{ record.downstreamPipeline?.code || '-' }}</a-tag>
+                    </span>
+                    <span v-else>{{ record.downstreamExternal }}</span>
+                  </template>
+                  <template v-else-if="column.key==='dependencyType'">
+                    <a-tag :color="record.dependencyType==='hard'?'red':'orange'">
+                      {{ record.dependencyType==='hard'?'强依赖':'弱依赖' }}
+                    </a-tag>
+                  </template>
+                  <template v-else-if="column.key==='action' && auth.isAdmin">
+                    <a-popconfirm title="确认删除该依赖?" @confirm="()=>removeEdge(record.id)">
+                      <a-button type="link" danger size="small">删除</a-button>
+                    </a-popconfirm>
+                  </template>
                 </template>
               </a-table>
             </a-card>
@@ -208,34 +192,26 @@
               </a-select>
             </a-col>
           </a-row>
-          <a-table :data-source="auditLogs.data || []" row-key="id" size="small"
+          <a-table :columns="auditCols" :data-source="auditLogs.data || []" row-key="id" size="small"
             :pagination="{ current: auditPage, pageSize: auditPageSize, total: auditLogs.total || 0, onChange: loadAuditLogs }">
-            <template #columns>
-              <a-table-column title="操作时间" data-index="createdAt" width="180">
-                <template #default="{ record }">
-                  {{ formatDateTime(record.createdAt) }}
-                </template>
-              </a-table-column>
-              <a-table-column title="操作人" width="120">
-                <template #default="{ record }">
-                  {{ record.user?.fullName || record.user?.username || '-' }}
-                </template>
-              </a-table-column>
-              <a-table-column title="操作类型" width="100">
-                <template #default="{ record }">
-                  <a-tag :color="record.actionType==='add'?'green':'red'">
-                    {{ record.actionType==='add'?'新增':'删除' }}
-                  </a-tag>
-                </template>
-              </a-table-column>
-              <a-table-column title="变更详情">
-                <template #default="{ record }">
-                  <span v-if="record.edgeInfo">
-                    {{ formatEdgeInfo(record.edgeInfo) }}
-                  </span>
-                </template>
-              </a-table-column>
-              <a-table-column title="IP地址" data-index="ipAddress" width="130" />
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key==='user'">
+                {{ record.user?.fullName || record.user?.username || '-' }}
+              </template>
+              <template v-else-if="column.key==='actionType'">
+                <a-tag :color="record.actionType==='add'?'green':'red'">
+                  {{ record.actionType==='add'?'新增':'删除' }}
+                </a-tag>
+              </template>
+              <template v-else-if="column.key==='detail'">
+                <span v-if="record.edgeInfo">
+                  {{ formatEdgeInfo(record.edgeInfo) }}
+                </span>
+                <span v-else>-</span>
+              </template>
+              <template v-else-if="column.dataIndex==='createdAt'">
+                {{ formatDateTime(record.createdAt) }}
+              </template>
             </template>
           </a-table>
         </a-card>
@@ -384,6 +360,28 @@ const slaCols = [
   {title:'阈值', key:'threshold', width:200},{title:'日期类型', dataIndex:'dateType', width:100},
   {title:'级别', dataIndex:'alertSeverity', width:90},{title:'启用', key:'enabled', width:80},
   {title:'操作', key:'op', width:80}
+]
+
+const upstreamCols = [
+  { title: '类型', key: 'type', width: 100 },
+  { title: '上游名称', key: 'name' },
+  { title: '依赖类型', key: 'dependencyType', width: 100 },
+  { title: '操作', key: 'action', width: 80 }
+]
+
+const downstreamCols = [
+  { title: '类型', key: 'type', width: 100 },
+  { title: '下游名称', key: 'name' },
+  { title: '依赖类型', key: 'dependencyType', width: 100 },
+  { title: '操作', key: 'action', width: 80 }
+]
+
+const auditCols = [
+  { title: '操作时间', dataIndex: 'createdAt', width: 180 },
+  { title: '操作人', key: 'user', width: 120 },
+  { title: '操作类型', key: 'actionType', width: 100 },
+  { title: '变更详情', key: 'detail' },
+  { title: 'IP地址', dataIndex: 'ipAddress', width: 130 }
 ]
 
 function formatThreshold(r) {
