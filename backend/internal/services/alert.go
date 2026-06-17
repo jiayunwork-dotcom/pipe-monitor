@@ -12,6 +12,7 @@ import (
 	"pipe-monitor/internal/config"
 	"pipe-monitor/internal/models"
 	"pipe-monitor/internal/utils"
+	"sort"
 	"strings"
 	"time"
 
@@ -218,12 +219,10 @@ func (a *AlertService) triggerAlert(pipe *models.Pipeline, run *models.PipelineR
 
 	a.db.Create(&event)
 
-	inSilent := a.isInSilentPeriod(rule, now)
-	if !inSilent {
-		a.notifyChannels(&event, rule, title, message)
-	}
+	a.notifyChannels(&event, rule, title, message)
 
 	if a.wsFn != nil {
+		inSilent := a.isInSilentPeriod(rule, now)
 		a.wsFn(tenantID, "new_alert", map[string]interface{}{
 			"id":         event.ID,
 			"title":      title,
@@ -248,7 +247,11 @@ func (a *AlertService) getCurrentOnCallUser(pipelineID, tenantID uint) *models.O
 	return &occ
 }
 
-func (a *AlertService) notifyChannels(event *models.AlertEvent, rule *models.AlertRule, title, message string) {
+func (a *AlertService) notifyChannels(event *models.AlertEvent, rule *models.AlertRule, title, message string, skipSilentCheck ...bool) {
+	skip := len(skipSilentCheck) > 0 && skipSilentCheck[0]
+	if !skip && a.isInSilentPeriod(rule, time.Now()) {
+		return
+	}
 	var channels []string
 	json.Unmarshal([]byte(rule.Channels), &channels)
 
@@ -569,7 +572,7 @@ func (a *AlertService) escalateAlert(event *models.AlertEvent, rule *models.Aler
 	msg := fmt.Sprintf("告警已从%s升级为%s，原因：%s\n\n原告警内容：%s",
 		severityText(fromSev), severityText(toSev), escalation.Reason, event.Message)
 
-	a.notifyChannels(event, rule, title, msg)
+	a.notifyChannels(event, rule, title, msg, true)
 
 	if leader != nil && leader.Email != "" {
 		a.sendEmail([]string{leader.Email}, title, msg)
@@ -907,7 +910,7 @@ type PaginatedAlertGroups struct {
 
 func (a *AlertService) ListAggregated(tenantID uint, isSuper bool, status, severity string, days, page, pageSize int) (*PaginatedAlertGroups, error) {
 	now := time.Now()
-	windowStart := now.Add(-30 * time.Minute)
+	window := 30 * time.Minute
 
 	var allAlerts []models.AlertEvent
 	q := a.db.Model(&models.AlertEvent{})
@@ -927,14 +930,34 @@ func (a *AlertService) ListAggregated(tenantID uint, isSuper bool, status, sever
 	q.Preload("Pipeline").Preload("AcknowledgedBy").Preload("ResolvedBy").Preload("Rule").
 		Order("triggered_at DESC").Find(&allAlerts)
 
-	type groupKey struct {
-		pipelineID uint
-		ruleID     uint
-		ruleType   string
-		severity   string
+	ruleIDMap := make(map[uint]string)
+	for i := range allAlerts {
+		alert := &allAlerts[i]
+		if alert.Rule != nil {
+			ruleIDMap[alert.RuleID] = string(alert.Rule.RuleType)
+		}
 	}
 
-	groups := make(map[string]*AlertAggregateGroup)
+	if len(ruleIDMap) > 0 {
+		ruleIDs := make([]uint, 0, len(ruleIDMap))
+		for id, t := range ruleIDMap {
+			if t == "" {
+				ruleIDs = append(ruleIDs, id)
+			}
+		}
+		if len(ruleIDs) > 0 {
+			var rules []models.AlertRule
+			a.db.Where("id IN ?", ruleIDs).Find(&rules)
+			for _, r := range rules {
+				ruleIDMap[r.ID] = string(r.RuleType)
+			}
+		}
+	}
+
+	type rawGroup struct {
+		Alerts []models.AlertEvent
+	}
+	groups := make(map[string]*rawGroup)
 	groupList := make([]string, 0)
 
 	for i := range allAlerts {
@@ -944,46 +967,58 @@ func (a *AlertService) ListAggregated(tenantID uint, isSuper bool, status, sever
 			pid = *alert.PipelineID
 		}
 
-		ruleType := ""
-		if alert.Rule != nil {
-			ruleType = string(alert.Rule.RuleType)
+		ruleType := ruleIDMap[alert.RuleID]
+		if ruleType == "" {
+			ruleType = "unknown"
 		}
 
 		key := fmt.Sprintf("%d|%d|%s|%s", pid, alert.RuleID, ruleType, alert.Severity)
 
 		group, exists := groups[key]
 		if !exists {
-			sev := string(alert.Severity)
-			group = &AlertAggregateGroup{
-				GroupKey:   key,
-				PipelineID: alert.PipelineID,
-				RuleID:     alert.RuleID,
-				RuleType:   ruleType,
-				Severity:   sev,
-				Alerts:     make([]models.AlertEvent, 0),
+			group = &rawGroup{
+				Alerts: make([]models.AlertEvent, 0),
 			}
 			groups[key] = group
 			groupList = append(groupList, key)
 		}
 
 		group.Alerts = append(group.Alerts, alert)
-		if group.LatestAlert == nil || alert.TriggeredAt.After(group.LatestAlert.TriggeredAt) {
-			group.LatestAlert = &alert
+	}
+
+	shouldAggregate := func(alerts []models.AlertEvent) bool {
+		if len(alerts) < 3 {
+			return false
 		}
-		group.Count++
+		sorted := make([]time.Time, len(alerts))
+		for i, a := range alerts {
+			sorted[i] = a.TriggeredAt
+		}
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Before(sorted[j]) })
+
+		for i := 0; i <= len(sorted)-3; i++ {
+			if sorted[i+2].Sub(sorted[i]) <= window {
+				return true
+			}
+		}
+		return false
 	}
 
 	resultGroups := make([]AlertAggregateGroup, 0)
 	for _, key := range groupList {
-		group := groups[key]
+		raw := groups[key]
 
-		if group.Count < 3 {
-			for _, alert := range group.Alerts {
+		if !shouldAggregate(raw.Alerts) {
+			for _, alert := range raw.Alerts {
+				rt := ruleIDMap[alert.RuleID]
+				if rt == "" {
+					rt = "unknown"
+				}
 				singleGroup := AlertAggregateGroup{
 					GroupKey:    fmt.Sprintf("single-%d", alert.ID),
 					PipelineID:  alert.PipelineID,
 					RuleID:      alert.RuleID,
-					RuleType:    group.RuleType,
+					RuleType:    rt,
 					Severity:    string(alert.Severity),
 					Count:       1,
 					LatestAlert: &alert,
@@ -992,29 +1027,25 @@ func (a *AlertService) ListAggregated(tenantID uint, isSuper bool, status, sever
 				resultGroups = append(resultGroups, singleGroup)
 			}
 		} else {
-			inWindow := 0
-			for _, alert := range group.Alerts {
-				if alert.TriggeredAt.After(windowStart) {
-					inWindow++
-				}
+			sort.Slice(raw.Alerts, func(i, j int) bool {
+				return raw.Alerts[i].TriggeredAt.After(raw.Alerts[j].TriggeredAt)
+			})
+			latest := &raw.Alerts[0]
+			rt := ruleIDMap[latest.RuleID]
+			if rt == "" {
+				rt = "unknown"
 			}
-			if inWindow >= 3 {
-				resultGroups = append(resultGroups, *group)
-			} else {
-				for _, alert := range group.Alerts {
-					singleGroup := AlertAggregateGroup{
-						GroupKey:    fmt.Sprintf("single-%d", alert.ID),
-						PipelineID:  alert.PipelineID,
-						RuleID:      alert.RuleID,
-						RuleType:    group.RuleType,
-						Severity:    string(alert.Severity),
-						Count:       1,
-						LatestAlert: &alert,
-						Alerts:      []models.AlertEvent{alert},
-					}
-					resultGroups = append(resultGroups, singleGroup)
-				}
+			group := AlertAggregateGroup{
+				GroupKey:    key,
+				PipelineID:  latest.PipelineID,
+				RuleID:      latest.RuleID,
+				RuleType:    rt,
+				Severity:    string(latest.Severity),
+				Count:       len(raw.Alerts),
+				LatestAlert: latest,
+				Alerts:      raw.Alerts,
 			}
+			resultGroups = append(resultGroups, group)
 		}
 	}
 

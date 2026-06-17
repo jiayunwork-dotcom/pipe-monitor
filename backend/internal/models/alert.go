@@ -51,7 +51,7 @@ type AlertRule struct {
 	PipelineID       *uint           `gorm:"index:idx_alert_rule_pipe" json:"pipelineId"`
 	Name             string          `gorm:"size:200;not null" json:"name"`
 	RuleType         AlertRuleType   `gorm:"size:50;not null" json:"ruleType"`
-	Conditions       string          `gorm:"type:json" json:"conditions"`
+	Conditions       string          `gorm:"type:json;default:'{}'" json:"conditions"`
 	ConsecutiveFailN int             `gorm:"default:3" json:"consecutiveFailN"`
 	DurationP95Multi float64         `gorm:"default:2.0" json:"durationP95Multi"`
 	SlaWarnMinBefore int             `gorm:"default:15" json:"slaWarnMinBefore"`
@@ -59,7 +59,7 @@ type AlertRule struct {
 	Severity         AlertSeverity   `gorm:"size:20;not null;default:warning" json:"severity"`
 	Channels         string          `gorm:"type:json;not null" json:"channels"`
 	CustomWebhookURL string          `gorm:"size:500" json:"customWebhookUrl"`
-	EmailRecipients  string          `gorm:"type:json" json:"emailRecipients"`
+	EmailRecipients  string          `gorm:"type:json;default:'[]'" json:"emailRecipients"`
 	NotifyOnCall     bool            `gorm:"default:true" json:"notifyOnCall"`
 	SuppressWindowMin int            `gorm:"default:60" json:"suppressWindowMin"`
 	Enabled          bool            `gorm:"default:true" json:"enabled"`
@@ -88,7 +88,7 @@ type AlertEvent struct {
 	Status             AlertStatus    `gorm:"size:20;not null;default:triggered;index:idx_alert_status" json:"status"`
 	Title              string         `gorm:"size:500;not null" json:"title"`
 	Message            string         `gorm:"type:text" json:"message"`
-	Detail             string         `gorm:"type:json" json:"detail"`
+	Detail             string         `gorm:"type:json;default:'{}'" json:"detail"`
 	TriggeredAt        time.Time      `gorm:"index:idx_alert_trigger" json:"triggeredAt"`
 	FirstTriggeredAt   time.Time      `json:"firstTriggeredAt"`
 	AcknowledgedAt     *time.Time     `json:"acknowledgedAt"`
@@ -100,7 +100,7 @@ type AlertEvent struct {
 	ResolvedBy         *User          `gorm:"foreignKey:ResolvedByID" json:"resolvedBy,omitempty"`
 	ResolveNote        string         `gorm:"type:text" json:"resolveNote"`
 	SuppressedUntil    *time.Time     `json:"suppressedUntil"`
-	ChannelsNotified   string         `gorm:"type:json" json:"channelsNotified"`
+	ChannelsNotified   string         `gorm:"type:json;default:'[]'" json:"channelsNotified"`
 	NotifyCount        int            `gorm:"default:1" json:"notifyCount"`
 	CreatedAt          time.Time      `json:"createdAt"`
 	UpdatedAt          time.Time      `json:"updatedAt"`
