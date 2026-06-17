@@ -313,7 +313,7 @@
     </a-form>
   </a-modal>
 
-  <a-modal v-model:open="batchImportModalVisible" title="批量导入血缘关系" width="900px" @ok="doBatchImport" :confirm-loading="batchImporting" ok-text="导入" cancel-text="取消">
+  <a-modal v-model:open="batchImportModalVisible" title="批量导入血缘关系" width="900px" @ok="doBatchImport" :confirm-loading="batchImporting" ok-text="导入" cancel-text="取消" :mask-closable="false">
     <a-alert type="info" show-icon style="margin-bottom:16px;">
       <template #message>
         CSV格式: 每行 <code>上游管道编码,下游管道编码,依赖类型,描述</code>，依赖类型可选值: hard/soft，描述可选
@@ -468,7 +468,8 @@ function handleBatchFileUpload(file) {
   return false
 }
 
-async function doBatchImport() {
+async function doBatchImport(e) {
+  if (e && e.preventDefault) e.preventDefault()
   if (!batchCSVContent.value.trim()) {
     message.warning('请粘贴或上传CSV内容')
     return
@@ -484,12 +485,22 @@ async function doBatchImport() {
     } else {
       message.success(`成功导入${r.data.successCount}条血缘关系`)
     }
-    loadAll()
+    try {
+      await loadLineageData()
+    } catch (e) {
+      // 忽略刷新错误，不影响导入结果展示
+    }
   } catch (e) {
     message.error(e.message || '批量导入失败')
   } finally {
     batchImporting.value = false
   }
+  return false
+}
+
+async function loadLineageData() {
+  const lineage = await lineageApi.getLineage(id.value)
+  lineageData.value = lineage.data || { upstreams: [], downstreams: [] }
 }
 
 const auditLogs = ref({ data: [], total: 0 })

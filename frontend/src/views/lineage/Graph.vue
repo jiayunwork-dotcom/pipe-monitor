@@ -299,16 +299,7 @@ async function reloadGraph() {
     graphData.value = r.data || { nodes: [], edges: [] }
     selectedNode.value = null
     highlightedNodes.value = new Set()
-
-    const pipelineIds = graphData.value.nodes.filter(n => n.type === 'pipeline' && n.pipelineId).map(n => n.pipelineId)
-    for (const pid of pipelineIds) {
-      try {
-        const hs = await lineageApi.getHealthScore(pid)
-        healthScores.value[String(pid)] = hs.data
-      } catch (e) {
-        // ignore
-      }
-    }
+    healthScores.value = {}
 
     collapsedTeams.value = new Set()
     const teamCounts = {}
@@ -325,6 +316,21 @@ async function reloadGraph() {
 
     await nextTick()
     renderGraph()
+
+    const pipelineIds = graphData.value.nodes.filter(n => n.type === 'pipeline' && n.pipelineId).map(n => n.pipelineId)
+    const healthPromises = pipelineIds.map(async (pid) => {
+      try {
+        const hs = await lineageApi.getHealthScore(pid)
+        healthScores.value[String(pid)] = hs.data
+      } catch (e) {
+        // ignore
+      }
+    })
+    await Promise.all(healthPromises)
+
+    if (network) {
+      renderGraph()
+    }
   } finally {
     loading.value = false
   }
@@ -710,8 +716,8 @@ async function compareSnapshots() {
   }
   try {
     const r = await lineageApi.compareSnapshots({
-      snapshotId1: selectedSnapshotIds.value[0],
-      snapshotId2: selectedSnapshotIds.value[1]
+      snapshotId1: Number(selectedSnapshotIds.value[0]),
+      snapshotId2: Number(selectedSnapshotIds.value[1])
     })
     snapshotDiff.value = r.data || { added: [], removed: [] }
     snapshotDiffVisible.value = true
