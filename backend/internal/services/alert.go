@@ -609,13 +609,17 @@ func (a *AlertService) CheckAndEscalate() {
 	a.db.Where("escalation_enabled = ? AND enabled = ?", true, true).Find(&rules)
 
 	ruleMap := make(map[uint]*models.AlertRule)
+	maxEscalateMin := 15
 	for i := range rules {
 		ruleMap[rules[i].ID] = &rules[i]
+		if rules[i].EscalationAfterMin > maxEscalateMin {
+			maxEscalateMin = rules[i].EscalationAfterMin
+		}
 	}
 
 	var events []models.AlertEvent
 	a.db.Where("status = ? AND triggered_at <= ?",
-		models.AlertTriggered, now.Add(-15*time.Minute)).
+		models.AlertTriggered, now.Add(-time.Duration(maxEscalateMin)*time.Minute)).
 		Preload("Rule").
 		Find(&events)
 

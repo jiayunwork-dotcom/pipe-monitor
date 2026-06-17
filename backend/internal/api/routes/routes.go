@@ -5,6 +5,7 @@ import (
 	"pipe-monitor/internal/middleware"
 	"pipe-monitor/internal/services"
 	"pipe-monitor/internal/websocket"
+	"time"
 
 	wsFiber "github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
@@ -27,8 +28,8 @@ func SetupRouter(
 ) *fiber.App {
 	app := fiber.New(fiber.Config{
 		BodyLimit:    50 * 1024 * 1024,
-		ReadTimeout:  300,
-		WriteTimeout: 300,
+		ReadTimeout:  300 * time.Second,
+		WriteTimeout: 300 * time.Second,
 	})
 
 	app.Use(recover.New())

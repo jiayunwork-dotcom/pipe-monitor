@@ -67,7 +67,7 @@ services:
     volumes:
       - ./frontend:/app
       - frontend_dist:/app/dist
-    command: sh -c "npm install && npm run build"
+    command: sh -c "rm -rf node_modules /app/dist/* && npm cache clean --force && npm install --legacy-peer-deps --no-audit --no-fund && npm run build"
 
   nginx:
     image: nginx:alpine
