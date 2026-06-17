@@ -202,6 +202,7 @@ func Seed(db *gorm.DB) error {
 		DateType:           models.DateWorkday,
 		FinishDeadlineTime: "06:00",
 		WarnThresholdSec:   1800,
+		AlertChannels:      `["feishu","email"]`,
 		AlertSeverity:      "critical",
 		Enabled:            true,
 	}
@@ -217,6 +218,7 @@ func Seed(db *gorm.DB) error {
 		DateType:           models.DateAny,
 		MaxDurationSec:     2700,
 		WarnThresholdSec:   300,
+		AlertChannels:      `["feishu","email"]`,
 		AlertSeverity:      "warning",
 		Enabled:            true,
 	}
@@ -232,6 +234,7 @@ func Seed(db *gorm.DB) error {
 		DateType:           models.DateWorkday,
 		FinishDeadlineTime: "08:00",
 		WarnThresholdSec:   1800,
+		AlertChannels:      `["feishu","email"]`,
 		AlertSeverity:      "critical",
 		Enabled:            true,
 	}

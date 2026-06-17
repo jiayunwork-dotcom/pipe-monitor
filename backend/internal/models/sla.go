@@ -38,7 +38,7 @@ type SLARule struct {
 	MinSuccessRate     float64    `json:"minSuccessRate"`
 	SuccessRateWindow  int        `gorm:"default:30" json:"successRateWindow"`
 	WarnThresholdSec   int        `json:"warnThresholdSec"`
-	AlertChannels      string     `gorm:"type:json" json:"alertChannels"`
+	AlertChannels      string     `gorm:"type:json;default:'[]'" json:"alertChannels"`
 	AlertSeverity      string     `gorm:"size:20;default:warning" json:"alertSeverity"`
 	Enabled            bool       `gorm:"default:true" json:"enabled"`
 	Description        string     `gorm:"type:text" json:"description"`

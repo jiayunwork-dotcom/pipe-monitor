@@ -204,7 +204,7 @@
     <a-modal v-model:open="resolveVisible" title="关闭告警" @ok="doResolve">
       <a-textarea v-model:value="resolveNote" :rows="4" placeholder="解决备注" />
     </a-modal>
-    <a-modal v-model:open="detailVisible" title="告警详情" :width="640px">
+    <a-modal v-model:open="detailVisible" title="告警详情" width="640px">
       <template v-if="currentAlert">
         <a-descriptions :column="2" bordered size="small">
           <a-descriptions-item label="标题">{{ currentAlert.title }}</a-descriptions-item>
