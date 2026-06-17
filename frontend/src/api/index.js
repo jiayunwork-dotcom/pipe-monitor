@@ -65,3 +65,13 @@ export const userApi = {
   me: () => http.get('/v1/users/me'),
   list: params => http.get('/v1/users', { params })
 }
+
+export const lineageApi = {
+  addEdge: (id, data) => http.post(`/v1/lineage/pipelines/${id}/edges`, data),
+  removeEdge: (id, edgeId) => http.delete(`/v1/lineage/pipelines/${id}/edges/${edgeId}`),
+  getLineage: id => http.get(`/v1/lineage/pipelines/${id}`),
+  getAuditLogs: (id, params) => http.get(`/v1/lineage/pipelines/${id}/audit`, { params }),
+  getGraph: params => http.get('/v1/lineage/graph', { params }),
+  impactAnalysis: data => http.post('/v1/lineage/impact-analysis', data),
+  checkCycle: (id, data) => http.post(`/v1/lineage/pipelines/${id}/check-cycle`, data)
+}

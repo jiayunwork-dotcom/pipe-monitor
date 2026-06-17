@@ -12,6 +12,7 @@ const routes = [
       { path: 'pipelines', name: 'PipelineList', component: () => import('@/views/pipelines/List.vue'), meta: { title: '管道管理' } },
       { path: 'pipelines/:id', name: 'PipelineDetail', component: () => import('@/views/pipelines/Detail.vue'), meta: { title: '管道详情' } },
       { path: 'dag', name: 'DAGView', component: () => import('@/views/DAG.vue'), meta: { title: '依赖图' } },
+      { path: 'lineage', name: 'LineageView', component: () => import('@/views/lineage/Graph.vue'), meta: { title: '数据血缘' } },
       { path: 'runs', name: 'RunList', component: () => import('@/views/Runs.vue'), meta: { title: '运行记录' } },
       { path: 'sla', name: 'SLAView', component: () => import('@/views/SLA.vue'), meta: { title: 'SLA中心' } },
       { path: 'alerts', name: 'AlertList', component: () => import('@/views/alerts/List.vue'), meta: { title: '告警中心' } },

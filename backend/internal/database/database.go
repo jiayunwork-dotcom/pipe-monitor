@@ -48,6 +48,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.DataSource{},
 		&models.Pipeline{},
 		&models.PipelineDependency{},
+		&models.LineageEdge{},
+		&models.LineageAuditLog{},
 		&models.PipelineRun{},
 		&models.SLARule{},
 		&models.SLAEvaluation{},
@@ -100,6 +102,11 @@ func AutoMigrate(db *gorm.DB) error {
 		{"handover_summaries", "fk_handover_from", "from_user_id", "users", "id", "RESTRICT"},
 		{"handover_summaries", "fk_handover_to", "to_user_id", "users", "id", "RESTRICT"},
 		{"audit_logs", "fk_audit_user", "user_id", "users", "id", "SET NULL"},
+		{"lineage_edges", "fk_lineage_pipe", "pipeline_id", "pipelines", "id", "CASCADE"},
+		{"lineage_edges", "fk_lineage_upstream_pipe", "upstream_pipeline_id", "pipelines", "id", "CASCADE"},
+		{"lineage_edges", "fk_lineage_downstream_pipe", "downstream_pipeline_id", "pipelines", "id", "CASCADE"},
+		{"lineage_audit_logs", "fk_lineage_audit_pipe", "pipeline_id", "pipelines", "id", "CASCADE"},
+		{"lineage_audit_logs", "fk_lineage_audit_user", "user_id", "users", "id", "RESTRICT"},
 	}
 
 	for _, fk := range fkDefinitions {

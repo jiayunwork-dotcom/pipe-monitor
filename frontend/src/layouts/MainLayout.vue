@@ -9,6 +9,7 @@
         <a-menu-item key="/dashboard"><dashboard-outlined /><span>全局大盘</span></a-menu-item>
         <a-menu-item key="/pipelines"><apartment-outlined /><span>管道管理</span></a-menu-item>
         <a-menu-item key="/dag"><cluster-outlined /><span>依赖拓扑</span></a-menu-item>
+        <a-menu-item key="/lineage"><share-alt-outlined /><span>数据血缘</span></a-menu-item>
         <a-menu-item key="/runs"><sync-outlined /><span>运行记录</span></a-menu-item>
         <a-menu-item key="/sla"><schedule-outlined /><span>SLA中心</span></a-menu-item>
         <a-menu-item key="/alerts"><bell-outlined /><span>告警中心</span></a-menu-item>
@@ -63,7 +64,7 @@ import { useWebSocketStore } from '@/stores/ws'
 import {
   DashboardOutlined, ApartmentOutlined, ClusterOutlined, SyncOutlined, ScheduleOutlined,
   BellOutlined, SettingOutlined, UsergroupAddOutlined, TeamOutlined, PieChartOutlined,
-  UserOutlined, LogoutOutlined, DownOutlined
+  UserOutlined, LogoutOutlined, DownOutlined, ShareAltOutlined
 } from '@ant-design/icons-vue'
 
 const $route = useRoute()

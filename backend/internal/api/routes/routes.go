@@ -52,6 +52,7 @@ func SetupRouter(
 	alertService.SetWSPublisher(wsPublisher)
 
 	pipelineService := services.NewPipelineService(db)
+	lineageService := services.NewLineageService(db)
 	runService := services.NewRunService(db, rdb, alertService)
 	runService.SetWSPublisher(wsPublisher)
 	runService.SetSLAEngine(slaEngine)
@@ -68,6 +69,7 @@ func SetupRouter(
 	apiV1 := api.Group("/v1", authMW)
 	setupDashboardRoutes(apiV1, runService)
 	setupPipelineRoutes(apiV1, pipelineService, runService)
+	setupLineageRoutes(apiV1, lineageService)
 	setupRunRoutes(apiV1, runService)
 	setupSLARoutes(apiV1, slaEngine, db)
 	setupAlertRoutes(apiV1, alertService, db)

@@ -64,6 +64,55 @@ type Pipeline struct {
 	UpdatedAt       time.Time      `json:"updatedAt"`
 }
 
+type LineageNodeType string
+
+const (
+	LineageNodePipeline LineageNodeType = "pipeline"
+	LineageNodeExternal LineageNodeType = "external"
+)
+
+type LineageDependencyType string
+
+const (
+	LineageDepHard LineageDependencyType = "hard"
+	LineageDepSoft LineageDependencyType = "soft"
+)
+
+type LineageEdge struct {
+	ID                 uint                  `gorm:"primaryKey" json:"id"`
+	TenantID           uint                  `gorm:"not null;index:idx_lineage_tenant" json:"tenantId"`
+	PipelineID         uint                  `gorm:"not null;index:idx_lineage_pipe" json:"pipelineId"`
+	Pipeline           Pipeline              `gorm:"foreignKey:PipelineID" json:"-"`
+	UpstreamType       LineageNodeType       `gorm:"size:20;not null;default:pipeline" json:"upstreamType"`
+	UpstreamPipelineID *uint                 `gorm:"index:idx_lineage_upstream_pipe" json:"upstreamPipelineId"`
+	UpstreamPipeline   *Pipeline             `gorm:"foreignKey:UpstreamPipelineID" json:"upstreamPipeline,omitempty"`
+	UpstreamExternal   string                `gorm:"size:200" json:"upstreamExternal"`
+	DownstreamType     LineageNodeType       `gorm:"size:20;not null;default:pipeline" json:"downstreamType"`
+	DownstreamPipelineID *uint               `gorm:"index:idx_lineage_downstream_pipe" json:"downstreamPipelineId"`
+	DownstreamPipeline *Pipeline             `gorm:"foreignKey:DownstreamPipelineID" json:"downstreamPipeline,omitempty"`
+	DownstreamExternal string                `gorm:"size:200" json:"downstreamExternal"`
+	DependencyType     LineageDependencyType `gorm:"size:20;default:hard" json:"dependencyType"`
+	EdgeDirection      string                `gorm:"size:10;not null;default:upstream" json:"edgeDirection"`
+	Description        string                `gorm:"size:500" json:"description"`
+	CreatedAt          time.Time             `json:"createdAt"`
+	CreatedBy          uint                  `gorm:"not null" json:"createdBy"`
+}
+
+type LineageAuditLog struct {
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	TenantID     uint      `gorm:"not null;index:idx_lineage_audit_tenant" json:"tenantId"`
+	PipelineID   uint      `gorm:"not null;index:idx_lineage_audit_pipe" json:"pipelineId"`
+	Pipeline     Pipeline  `gorm:"foreignKey:PipelineID" json:"-"`
+	UserID       uint      `gorm:"not null" json:"userId"`
+	User         User      `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	ActionType   string    `gorm:"size:20;not null;index:idx_lineage_audit_action" json:"actionType"`
+	EdgeID       *uint     `json:"edgeId"`
+	EdgeInfo     string    `gorm:"type:json" json:"edgeInfo"`
+	ChangeDetail string    `gorm:"type:json" json:"changeDetail"`
+	IPAddress    string    `gorm:"size:50" json:"ipAddress"`
+	CreatedAt    time.Time `gorm:"index:idx_lineage_audit_time" json:"createdAt"`
+}
+
 type PipelineDependency struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`
 	TenantID      uint      `gorm:"not null;index" json:"tenantId"`
