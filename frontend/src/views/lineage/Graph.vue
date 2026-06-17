@@ -304,7 +304,7 @@ async function reloadGraph() {
     for (const pid of pipelineIds) {
       try {
         const hs = await lineageApi.getHealthScore(pid)
-        healthScores.value[pid] = hs.data
+        healthScores.value[String(pid)] = hs.data
       } catch (e) {
         // ignore
       }
@@ -561,7 +561,7 @@ function getNodeTooltip(node) {
 
   const slaLabel = getSLALabel(node.slaStatus)
   const runTime = node.lastRunTime ? dayjs(node.lastRunTime).format('YYYY-MM-DD HH:mm:ss') : '从未运行'
-  const health = node.pipelineId ? healthScores.value[node.pipelineId] : null
+  const health = node.pipelineId ? healthScores.value[String(node.pipelineId)] : null
 
   let healthHtml = ''
   if (health) {

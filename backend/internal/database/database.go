@@ -50,6 +50,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.PipelineDependency{},
 		&models.LineageEdge{},
 		&models.LineageAuditLog{},
+		&models.LineageSnapshot{},
 		&models.PipelineRun{},
 		&models.SLARule{},
 		&models.SLAEvaluation{},

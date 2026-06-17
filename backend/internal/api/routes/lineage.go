@@ -200,7 +200,7 @@ func setupLineageRoutes(r fiber.Router, lineageSvc *services.LineageService) {
 		auth := middleware.GetAuthCtx(c)
 
 		var req struct {
-			CSVContent string `json:"csvContent"`
+			CSVContent string                   `json:"csvContent"`
 			Items      []services.BatchImportItem `json:"items"`
 		}
 
@@ -211,11 +211,17 @@ func setupLineageRoutes(r fiber.Router, lineageSvc *services.LineageService) {
 		var items []services.BatchImportItem
 		if len(req.Items) > 0 {
 			items = req.Items
-		} else if req.CSVContent != "" {
-			lines := strings.Split(strings.TrimSpace(req.CSVContent), "\n")
+		} else if strings.TrimSpace(req.CSVContent) != "" {
+			normalized := strings.ReplaceAll(req.CSVContent, "\r\n", "\n")
+			normalized = strings.ReplaceAll(normalized, "\r", "\n")
+			normalized = strings.ReplaceAll(normalized, "，", ",")
+			lines := strings.Split(strings.TrimSpace(normalized), "\n")
 			for _, line := range lines {
 				line = strings.TrimSpace(line)
 				if line == "" {
+					continue
+				}
+				if strings.HasPrefix(line, "#") {
 					continue
 				}
 				parts := strings.Split(line, ",")
@@ -227,10 +233,17 @@ func setupLineageRoutes(r fiber.Router, lineageSvc *services.LineageService) {
 					DownstreamCode: strings.TrimSpace(parts[1]),
 				}
 				if len(parts) >= 3 {
-					item.DependencyType = strings.TrimSpace(parts[2])
+					depType := strings.ToLower(strings.TrimSpace(parts[2]))
+					if depType == "强依赖" {
+						depType = "hard"
+					} else if depType == "弱依赖" {
+						depType = "soft"
+					}
+					item.DependencyType = depType
 				}
 				if len(parts) >= 4 {
-					item.Description = strings.TrimSpace(parts[3])
+					descParts := parts[3:]
+					item.Description = strings.TrimSpace(strings.Join(descParts, ","))
 				}
 				items = append(items, item)
 			}
@@ -251,7 +264,7 @@ func setupLineageRoutes(r fiber.Router, lineageSvc *services.LineageService) {
 
 		result, err := lineageSvc.BatchImport(auth.TenantID, auth.UserID, ip, items)
 		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+			return c.Status(500).JSON(fiber.Map{"error": "批量导入失败: " + err.Error()})
 		}
 
 		return c.JSON(fiber.Map{"data": result})

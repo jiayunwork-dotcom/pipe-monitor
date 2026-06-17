@@ -132,6 +132,6 @@ type LineageSnapshot struct {
 	Description string         `gorm:"size:500" json:"description"`
 	SnapshotData utils.JSONString `gorm:"type:json" json:"snapshotData"`
 	CreatedBy   uint           `gorm:"not null" json:"createdBy"`
-	User        User           `gorm:"foreignKey:CreatedBy" json:"user,omitempty"`
+	User        *User          `gorm:"foreignKey:CreatedBy" json:"user,omitempty"`
 	CreatedAt   time.Time      `json:"createdAt"`
 }

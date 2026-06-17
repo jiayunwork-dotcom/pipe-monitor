@@ -1321,12 +1321,16 @@ func (s *LineageService) CalculateHealthScore(pipelineID uint) (*HealthScoreResu
 			s.db.Model(&models.PipelineRun{}).
 				Where("pipeline_id = ? AND status IN ? AND created_at >= ?",
 					*edge.UpstreamPipelineID,
-					[]string{string(models.RunFailed), string(models.RunTimeout), string(models.RunCancelled)},
+					[]models.RunStatus{models.RunFailed, models.RunTimeout, models.RunCancelled},
 					sevenDaysAgo).
 				Count(&failCount)
 			if failCount > 0 {
 				score -= 15
-				details = append(details, fmt.Sprintf("上游管道[%s]最近7天内运行失败: -15分", edge.UpstreamPipeline.Name))
+				pipeName := fmt.Sprintf("ID:%d", *edge.UpstreamPipelineID)
+				if edge.UpstreamPipeline != nil {
+					pipeName = edge.UpstreamPipeline.Name
+				}
+				details = append(details, fmt.Sprintf("上游管道[%s]最近7天内运行失败: -15分", pipeName))
 			}
 		}
 	}
@@ -1350,7 +1354,11 @@ func (s *LineageService) CalculateHealthScore(pipelineID uint) (*HealthScoreResu
 				}
 				if allFailed {
 					score -= 25
-					details = append(details, fmt.Sprintf("弱依赖上游管道[%s]连续3次运行失败: -25分", edge.UpstreamPipeline.Name))
+					pipeName := fmt.Sprintf("ID:%d", *edge.UpstreamPipelineID)
+					if edge.UpstreamPipeline != nil {
+						pipeName = edge.UpstreamPipeline.Name
+					}
+					details = append(details, fmt.Sprintf("弱依赖上游管道[%s]连续3次运行失败: -25分", pipeName))
 				}
 			}
 		}
